@@ -11,6 +11,27 @@ export class ResponseAccountRmsInfo extends Packet {
     this.user_msg = [];
     this.rq_handler_rp_code = [];
     this.rp_code = [];
+    this.fcm_id = "";
+    this.ib_id = "";
+    this.account_id = "";
+    this.account_name = "";
+    this.account_currency = "";
+    this.account_auto_liquidate = "";
+    this.buy_qty = 0;
+    this.sell_qty = 0;
+    this.order_buy_qty = 0;
+    this.order_sell_qty = 0;
+    this.fill_buy_qty = 0;
+    this.fill_sell_qty = 0;
+    this.net_quantity = 0;
+    this.open_position_pnl = "";
+    this.open_position_quantity = 0;
+    this.closed_position_pnl = "";
+    this.closed_position_quantity = 0;
+    this.open_long_options_value = "";
+    this.open_short_options_value = "";
+    this.closed_options_value = "";
+    this.option_cash_reserved = "";
   }
 }
 
