@@ -1,0 +1,44 @@
+{
+  "name": "rithmic-api",
+  "version": "1.0.0",
+  "description": "Unofficial Node.js client for the Rithmic Protocol Buffer WebSocket API",
+  "type": "module",
+  "main": "./index.js",
+  "exports": "./index.js",
+  "files": [
+    "index.js",
+    "init.js",
+    "Client.js",
+    "lib",
+    "protocol",
+    "proto",
+    "Session.js",
+    "ChartSession.js",
+    "tools"
+  ],
+  "scripts": {
+    "example": "node --env-file=.env examples/handshake.js",
+    "example:gateway": "node --env-file=.env examples/gateway-session.js",
+    "example:bars": "node --env-file=.env examples/time-bars-replay.js",
+    "example:chart": "node --env-file=.env examples/live-chart.js",
+    "decode": "node tools/decode.js",
+    "protos:download": "node tools/download-protos.mjs",
+    "protos:packets": "node tools/generate-packets.mjs",
+    "test": "node examples/handshake.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "rithmic",
+    "trading",
+    "websocket",
+    "protobuf",
+    "futures"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "protobufjs": "^7.4.0",
+    "ws": "^8.18.0"
+  }
+}

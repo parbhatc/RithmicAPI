@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+*.log
+.DS_Store
+
+extension/
+# Local comparison/testing artifacts
+testing/
+*.mismatch.json
+*.compare.json
+history-compare*.json

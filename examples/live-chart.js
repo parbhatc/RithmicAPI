@@ -1,0 +1,53 @@
+/**
+ * Live chart demo: history replay + last/bid/ask + forming bars.
+ *
+ * Env: RITHMIC_USER, RITHMIC_PASSWORD (+ optional RITHMIC_* in .env)
+ */
+import { ChartSession } from "../ChartSession.js";
+
+const user = process.env.RITHMIC_USER;
+const password = process.env.RITHMIC_PASSWORD;
+const systemName = process.env.RITHMIC_SYSTEM ?? "LucidTrading";
+const symbol = process.env.RITHMIC_SYMBOL ?? "NQ";
+const exchange = process.env.RITHMIC_EXCHANGE ?? "CME";
+const barCount = Number(process.env.RITHMIC_BAR_COUNT ?? "60", 10);
+
+if (!user || !password) {
+  console.error("Set RITHMIC_USER and RITHMIC_PASSWORD.");
+  process.exit(1);
+}
+
+const chart = await ChartSession.open({
+  user,
+  password,
+  systemName,
+  symbol,
+  exchange,
+  gatewayName: process.env.RITHMIC_GATEWAY,
+});
+
+chart.on("trade", (t) => console.log("[trade]", t.price, t.size));
+chart.on("quote", (q) => console.log("[quote]", q.bid, "x", q.ask));
+chart.on("bar", (b) => console.log("[bar]", b.marker, b.close));
+chart.on("status", (s) => {
+  if (process.env.RITHMIC_VERBOSE === "1") console.log("[status]", s);
+});
+
+try {
+  const history = await chart.loadHistory({ barCount });
+  console.log(`History: ${history.length} bars`);
+  if (history.length) {
+    console.log("  first:", history[0].marker, history[0].close);
+    console.log("  last: ", history[history.length - 1].marker, history[history.length - 1].close);
+  }
+
+  console.log("\nLive feed (Ctrl+C to stop)…\n");
+  await chart.startLive();
+
+  await new Promise((resolve) => {
+    process.once("SIGINT", resolve);
+  });
+} finally {
+  await chart.stopLive();
+  chart.close();
+}
