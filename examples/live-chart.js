@@ -17,6 +17,35 @@ if (!user || !password) {
   process.exit(1);
 }
 
+const fmtPrice = (n) => (n == null ? "—" : Number(n).toFixed(2));
+const fmtQty = (n) => (n == null ? "—" : String(n));
+const fmtTime = (sec) =>
+  sec == null ? "—" : new Date(Number(sec) * 1000).toLocaleString();
+
+function logQuote(q) {
+  const sym = q.symbol ?? symbol;
+  console.log(
+    `${sym}  Bid ${fmtPrice(q.bid)} x ${fmtQty(q.bid_size)}  |  Ask ${fmtPrice(q.ask)} x ${fmtQty(q.ask_size)}`,
+  );
+}
+
+function logTrade(t) {
+  const sym = t.symbol ?? symbol;
+  const side =
+    t.aggressor === 1 || t.aggressor === "BUY"
+      ? "Buy"
+      : t.aggressor === 2 || t.aggressor === "SELL"
+        ? "Sell"
+        : null;
+  const sideLabel = side ? `  ${side}` : "";
+  console.log(`${sym}  Last ${fmtPrice(t.price)} x ${fmtQty(t.size)}${sideLabel}`);
+}
+
+function logBar(b) {
+  const sym = b.symbol ?? symbol;
+  console.log(`${sym}  Bar ${fmtTime(b.marker)}  close ${fmtPrice(b.close)}  vol ${fmtQty(b.volume)}`);
+}
+
 const chart = await ChartSession.open({
   user,
   password,
@@ -26,9 +55,9 @@ const chart = await ChartSession.open({
   gatewayName: process.env.RITHMIC_GATEWAY,
 });
 
-chart.on("trade", (t) => console.log("[trade]", t.price, t.size));
-chart.on("quote", (q) => console.log("[quote]", q.bid, "x", q.ask));
-chart.on("bar", (b) => console.log("[bar]", b.marker, b.close));
+chart.on("trade", logTrade);
+chart.on("quote", logQuote);
+chart.on("bar", logBar);
 chart.on("status", (s) => {
   if (process.env.RITHMIC_VERBOSE === "1") console.log("[status]", s);
 });
@@ -37,8 +66,8 @@ try {
   const history = await chart.loadHistory({ barCount });
   console.log(`History: ${history.length} bars`);
   if (history.length) {
-    console.log("  first:", history[0].marker, history[0].close);
-    console.log("  last: ", history[history.length - 1].marker, history[history.length - 1].close);
+    console.log("  first:", fmtTime(history[0].marker), history[0].close);
+    console.log("  last: ", fmtTime(history[history.length - 1].marker), history[history.length - 1].close);
   }
 
   console.log("\nLive feed (Ctrl+C to stop)…\n");

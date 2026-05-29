@@ -11,12 +11,12 @@ export class Client {
     this.timeoutMs = timeoutMs;
     this.log = log;
     this.ws = null;
-    this.#recvQueue = [];
-    this.#recvWaiters = [];
   }
 
   #recvQueue = [];
   #recvWaiters = [];
+  /** Push packets received while waiting for an exchange() response. */
+  #pendingPackets = [];
 
   async connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return;
@@ -63,20 +63,32 @@ export class Client {
   }
 
   async receive() {
-    const raw = await this.#readFrame();
-    const packet = Packet.decodeFrame(raw);
-    if (this.log) this.#log("recv", packet, parseFrame(raw).frame);
-    return packet;
+    if (this.#pendingPackets.length) {
+      const packet = this.#pendingPackets.shift();
+      if (this.log) this.#log("recv", packet);
+      return packet;
+    }
+    return this.#receiveFromWire();
   }
 
-  async exchange(request) {
+  async exchange(request, { maxPush = 100 } = {}) {
     this.send(request);
-    const response = await this.receive();
     const Expected = request.constructor.Response;
-    if (Expected && !(response instanceof Expected)) {
-      throw new Error(`expected ${Expected.MESSAGE_NAME}, got ${response.constructor.MESSAGE_NAME}`);
+    let pushed = 0;
+
+    while (true) {
+      const response = await this.#receiveFromWire();
+      if (!Expected || response instanceof Expected) {
+        return response;
+      }
+      this.#pendingPackets.push(response);
+      pushed += 1;
+      if (pushed >= maxPush) {
+        throw new Error(
+          `expected ${Expected.MESSAGE_NAME}, got ${maxPush} push messages first (last: ${response.constructor.MESSAGE_NAME})`,
+        );
+      }
     }
-    return response;
   }
 
   sendAll(packets) {
@@ -106,6 +118,14 @@ export class Client {
   close() {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close(1000);
     this.ws = null;
+    this.#pendingPackets = [];
+  }
+
+  async #receiveFromWire() {
+    const raw = await this.#readFrame();
+    const packet = Packet.decodeFrame(raw);
+    if (this.log) this.#log("recv", packet, parseFrame(raw).frame);
+    return packet;
   }
 
   #readFrame() {
@@ -132,7 +152,7 @@ export class Client {
   #log(dir, packet, frame) {
     console.log(`[${this.label}] ${dir} ${packet.constructor.MESSAGE_NAME}`);
     console.log(JSON.stringify(toPlain(packet.toObject()), null, 2));
-    if (dir === "send" || dir === "recv") {
+    if ((dir === "send" || dir === "recv") && frame) {
       console.log(`  wire: ${frame.toString("base64")}`);
     }
   }

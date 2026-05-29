@@ -19,11 +19,14 @@ import {
   ReplayTimeOrder,
   SubscribeRequest,
   MarketUpdatePreset,
+  LastTradePresence,
+  BestBidOfferPresence,
 } from "./lib/market-enums.js";
 import {
   normalizeBar,
   normalizeTrade,
   normalizeQuote,
+  mergeTick,
   chartStatus,
 } from "./lib/market-views.js";
 import { resolveHistoryQuery, barsToHistoryPayload } from "./lib/history-query.js";
@@ -36,6 +39,10 @@ const WEB_APP = {
 
 function userMsg(symbol, exchange) {
   return `${symbol}.${exchange}`;
+}
+
+function hasBit(bits, flag) {
+  return ((bits ?? 0) & flag) !== 0;
 }
 
 async function resolveGatewayUri({ systemName, uri, gatewayName }) {
@@ -355,14 +362,23 @@ export class ChartSession extends EventEmitter {
 
   #dispatch(packet, plant) {
     if (packet instanceof LastTrade) {
-      this.#trade = normalizeTrade(packet);
-      this.emit("trade", this.#trade);
+      const partial = normalizeTrade(packet);
+      this.#trade = mergeTick(this.#trade, partial);
+      if (hasBit(partial.presence_bits, LastTradePresence.LAST_TRADE)) {
+        this.emit("trade", this.#trade);
+      }
       this.emit("status", this.status);
       return;
     }
     if (packet instanceof BestBidOffer) {
-      this.#quote = normalizeQuote(packet);
-      this.emit("quote", this.#quote);
+      const partial = normalizeQuote(packet);
+      this.#quote = mergeTick(this.#quote, partial);
+      if (
+        hasBit(partial.presence_bits, BestBidOfferPresence.BID) ||
+        hasBit(partial.presence_bits, BestBidOfferPresence.ASK)
+      ) {
+        this.emit("quote", this.#quote);
+      }
       this.emit("status", this.status);
       return;
     }

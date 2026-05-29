@@ -91,7 +91,7 @@ const payload = await fetchHistory({
 
 | Param | Maps to | Notes |
 |-------|---------|--------|
-| `resolution` | `bar_type` + `bar_type_period` | `1`, `5`, `15`, `60` (minutes), or `"1D"` / `"1W"` |
+| `resolution` | `bar_type` + `bar_type_period` | Minutes: `1`, `5`, `15`, `60` · Seconds: `"1S"`, `"5S"` · Daily/weekly: `"1D"` / `"1W"` |
 | `from` | `start_index` | Unix seconds (range start) |
 | `to` | `finish_index` | Unix seconds (range end) |
 | `countback` | — | If `from` is omitted: `from = to - countback × period` |
@@ -106,8 +106,15 @@ Legacy names still work: `barCount`, `period`, `start_index`, `finish_index`.
 
 ### Live chart (last, bid/ask, forming bar)
 
+`ChartSession` uses **two WebSocket connections** on the same gateway:
+
+- **Ticker plant** — `LastTrade` (150), `BestBidOffer` (151)
+- **History plant** — live `TimeBar` (250) after `RequestTimeBarUpdate` (200)
+
+Load history **before** `startLive()` so replay finishes before live pumps start.
+
 ```js
-import { ChartSession } from "rithmic-api";
+import { ChartSession, BarType } from "rithmic-api";
 
 const chart = await ChartSession.open({
   user: process.env.RITHMIC_USER,
@@ -118,35 +125,86 @@ const chart = await ChartSession.open({
   gatewayName: "Chicago", // optional; default first Chicago gateway from discover()
 });
 
-// 1) Load history first (before live pumps start)
 const history = await chart.loadHistory({ barCount: 300 });
 
-// 2) Stream live updates
-chart.on("trade", (t) => console.log("last", t.price));
+chart.on("trade", (t) => console.log("last", t.price, t.size));
 chart.on("quote", (q) => console.log("bid/ask", q.bid, q.ask));
 chart.on("bar", (b) => console.log("bar", b.marker, b.close));
 chart.on("status", (s) => {
-  // merged snapshot: last, bid, ask, bar_close, volume, …
+  // merged snapshot: last, bid, ask, vwap, bar_close, …
 });
 
+// Default: 1-minute live bars on the history plant
 await chart.startLive();
 
-// … later
+// 1-second live bars (matches web app SECOND_BAR + period 1)
+await chart.startLive({
+  barType: BarType.SECOND_BAR,
+  barPeriod: 1,
+});
+
 await chart.stopLive();
 chart.close();
 ```
 
-| Event | Wire template | Fields (normalized) |
-|-------|---------------|------------------------|
-| `trade` | 150 `LastTrade` | `price`, `size`, `volume`, `net_change`, … |
-| `quote` | 151 `BestBidOffer` | `bid`, `ask`, `bid_size`, `ask_size` |
-| `bar` | 250 `TimeBar` | `open`, `high`, `low`, `close`, `marker`, `volume` |
-| `status` | — | `chart.status` / event payload: last + bid/ask + bar |
+| Event | Wire template | When it fires |
+|-------|---------------|----------------|
+| `trade` | 150 `LastTrade` | New **last trade** (`presence_bits` includes `LAST_TRADE`) |
+| `quote` | 151 `BestBidOffer` | Bid and/or ask updated (`BID` / `ASK` bits) |
+| `bar` | 250 `TimeBar` | Forming or closed **OHLC bar** for the subscribed resolution |
+| `status` | — | Merged snapshot after any tick/quote/bar update |
+
+Normalized event fields:
+
+| Event | Key fields |
+|-------|------------|
+| `trade` | `price`, `size`, `volume`, `vwap`, `net_change`, `presence_bits` |
+| `quote` | `bid`, `ask`, `bid_size`, `ask_size`, `lean`, `presence_bits` |
+| `bar` | `open`, `high`, `low`, `close`, `marker`, `volume`, `num_trades`, `bid_volume`, `ask_volume` |
+
+#### Partial updates (`presence_bits`)
+
+Rithmic often sends **incomplete** ticks — only the fields flagged in `presence_bits` are present on the wire. Examples:
+
+- `LastTrade` with `presence_bits: 16` → **VWAP only** (no new price/size)
+- `BestBidOffer` with `presence_bits: 2` → **ask side only**
+
+`ChartSession` **merges** partial updates into the last known quote/trade and only emits:
+
+- `trade` when a new last price/size arrives
+- `quote` when bid or ask changes
+
+Use `chart.status` for a single merged view (last + bid/ask + bar close).
+
+#### Live `TimeBar` semantics
+
+- `marker` = **bar open time** (Unix seconds, UTC) — the start of the bucket (e.g. `8:22:00 PM` for a 1m bar)
+- Same `marker` repeated → same candle still **forming** (OHLC/volume update)
+- `marker` advances → **new candle** (previous bucket closed)
+- For OHLC **close**, use `TimeBar.close` or `LastTrade.price` — not bid/ask (quotes update more often but are not traded price)
+
+Bid = buy side of the book. Ask = sell side. `Last … Buy/Sell` is the **aggressor** on that print, not a different close type.
+
+#### Examples
 
 ```bash
 npm run example:bars    # history replay only
 npm run example:chart   # history + live (Ctrl+C to exit)
 ```
+
+`examples/live-chart.js` prints readable lines like:
+
+```
+History: 300 bars
+  first: 5/28/2026, 2:22:00 PM 30307.75
+  last:  5/28/2026, 8:21:00 PM 30294.75
+
+NQ  Bid 30284.50 x 2  |  Ask 30285.75 x 1
+NQ  Last 30285.00 x 1  Buy
+NQ  Bar 5/28/2026, 8:22:00 PM  close 30288.75  vol 87
+```
+
+Set `RITHMIC_VERBOSE=1` to log merged `status` snapshots.
 
 ### Lower-level packets
 
@@ -179,6 +237,8 @@ client.send(
 );
 const msg = await client.receive(); // LastTrade or BestBidOffer
 ```
+
+`Client.exchange(request)` waits for the matching `Response*` class. If the server sends push data first (e.g. `BestBidOffer` before `ResponseMarketDataUpdate`), those packets are **queued** and returned by the next `receive()` call — same behavior as the web app’s subscribe flow.
 
 Replay request enums must be **numeric** on the wire (e.g. `bar_type: 2` for `MINUTE_BAR`, not the string `"MINUTE_BAR"`).
 
@@ -249,8 +309,9 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 | `barsToHistoryPayload(bars)` | Normalized bars → `{ s, t, o, h, l, c, v }` |
 | `ChartSession` | Dual-plant chart session (`open`, `loadHistory`, `startLive`, events) |
 | `ChartSession.open(options)` | Connect ticker + history |
-| `normalizeBar` / `normalizeTrade` / `normalizeQuote` | Packet → plain objects |
-| `BarType`, `MarketUpdateBits`, `MarketUpdatePreset`, … | Wire enums |
+| `normalizeBar` / `normalizeTrade` / `normalizeQuote` | Packet → plain objects (respects `presence_bits`) |
+| `mergeTick` | Merge partial quote/trade updates |
+| `BarType`, `MarketUpdateBits`, `MarketUpdatePreset`, `LastTradePresence`, `BestBidOfferPresence`, … | Wire enums |
 | `Client` | `send`, `receive`, `exchange`, `drain`, `close` |
 | `Request*` / `Response*` / `LastTrade` / `TimeBar` / … | Packet classes |
 | `buildOrderPlantHandshake`, … | Order-plant login helpers |
@@ -272,6 +333,7 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 | `RITHMIC_SYMBOL` / `RITHMIC_EXCHANGE` | e.g. `NQ` / `CME` |
 | `RITHMIC_BAR_COUNT` | History length for examples |
 | `RITHMIC_GATEWAY` | Optional gateway name filter |
+| `RITHMIC_VERBOSE` | Set to `1` in `live-chart` for merged `status` logs |
 
 ## Project layout
 
