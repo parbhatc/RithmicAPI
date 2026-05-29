@@ -6,11 +6,14 @@ import {
   RequestLoginInfo,
   RequestHeartbeat,
   RequestMarketDataUpdate,
+  RequestReferenceData,
   RequestTimeBarReplay,
   RequestTimeBarUpdate,
   ResponseTimeBarReplay,
   LastTrade,
   BestBidOffer,
+  ClosePrice,
+  HighPriceLowPrice,
   TimeBar,
 } from "./protocol/index.js";
 import {
@@ -26,6 +29,8 @@ import {
   normalizeBar,
   normalizeTrade,
   normalizeQuote,
+  normalizeClosePrice,
+  normalizeHighLow,
   mergeTick,
   chartStatus,
 } from "./lib/market-views.js";
@@ -80,6 +85,8 @@ async function loginPlant(client, credentials, infraType) {
  * Emits:
  * - `trade` — LastTrade (150)
  * - `quote` — BestBidOffer (151)
+ * - `latest_high_low` — HighPriceLowPrice (152)
+ * - `latest_close` — ClosePrice (155)
  * - `bar` — TimeBar (250)
  * - `status` — merged last/bid/ask/bar snapshot
  * - `message` — any other decoded packet (debug)
@@ -93,6 +100,8 @@ export class ChartSession extends EventEmitter {
   #trade = null;
   #quote = null;
   #bar = null;
+  #latestHighLow = null;
+  #latestClose = null;
 
   constructor() {
     super();
@@ -109,6 +118,8 @@ export class ChartSession extends EventEmitter {
       trade: this.#trade,
       quote: this.#quote,
       bar: this.#bar,
+      latestHighLow: this.#latestHighLow,
+      latestClose: this.#latestClose,
     });
   }
 
@@ -272,16 +283,32 @@ export class ChartSession extends EventEmitter {
    *
    * @param {object} [options]
    * @param {number} [options.updateBits=MarketUpdatePreset.QUOTE]
+   * @param {boolean} [options.referenceData=true] Send RequestReferenceData before subscribe (web app does this)
+   * @param {string} [options.priceType='final'] Reference data price type (`user_msg[1]`)
+   * @param {string} [options.referenceMode='auto'] Reference data mode (`user_msg[2]`)
    * @param {number} [options.barType=BarType.MINUTE_BAR]
    * @param {number} [options.barPeriod=1]
    */
   async startLive({
     updateBits = MarketUpdatePreset.QUOTE,
+    referenceData = true,
+    priceType = "final",
+    referenceMode = "auto",
     barType = BarType.MINUTE_BAR,
     barPeriod = 1,
   } = {}) {
     if (this.#live) return;
     const msg = userMsg(this.symbol, this.exchange);
+
+    if (referenceData) {
+      await this.#ticker.exchange(
+        new RequestReferenceData({
+          symbol: this.symbol,
+          exchange: this.exchange,
+          user_msg: [msg, priceType, referenceMode],
+        }),
+      );
+    }
 
     await this.#ticker.exchange(
       new RequestMarketDataUpdate({
@@ -303,6 +330,12 @@ export class ChartSession extends EventEmitter {
         bar_type_period: barPeriod,
       }),
     );
+
+    // Snapshots (152/155) often arrive right after subscribe, before the pump loop runs.
+    const early = await this.#ticker.drain({ idleMs: 400, max: 30 });
+    for (const packet of early) {
+      this.#dispatch(packet, "ticker");
+    }
 
     this.#live = true;
     this.#pumps.push(this.#pump(this.#ticker, "ticker"), this.#pump(this.#history, "history"));
@@ -385,6 +418,18 @@ export class ChartSession extends EventEmitter {
     if (packet instanceof TimeBar) {
       this.#bar = normalizeBar(packet);
       this.emit("bar", this.#bar);
+      this.emit("status", this.status);
+      return;
+    }
+    if (packet instanceof HighPriceLowPrice) {
+      this.#latestHighLow = normalizeHighLow(packet);
+      this.emit("latest_high_low", this.#latestHighLow);
+      this.emit("status", this.status);
+      return;
+    }
+    if (packet instanceof ClosePrice) {
+      this.#latestClose = normalizeClosePrice(packet);
+      this.emit("latest_close", this.#latestClose);
       this.emit("status", this.status);
       return;
     }

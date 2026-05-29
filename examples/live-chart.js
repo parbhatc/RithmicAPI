@@ -3,7 +3,7 @@
  *
  * Env: RITHMIC_USER, RITHMIC_PASSWORD (+ optional RITHMIC_* in .env)
  */
-import { ChartSession } from "../ChartSession.js";
+import { ChartSession, MarketUpdatePreset } from "../index.js";
 
 const user = process.env.RITHMIC_USER;
 const password = process.env.RITHMIC_PASSWORD;
@@ -46,6 +46,21 @@ function logBar(b) {
   console.log(`${sym}  Bar ${fmtTime(b.marker)}  close ${fmtPrice(b.close)}  vol ${fmtQty(b.volume)}`);
 }
 
+function logLatestHighLow(r) {
+  const sym = r.symbol ?? symbol;
+  console.log(`${sym}  latest_high_low  high ${fmtPrice(r.high_price)}  low ${fmtPrice(r.low_price)}`);
+}
+
+function logLatestClose(c) {
+  const sym = c.symbol ?? symbol;
+  const closeLabel = c.close_date ? `${c.close_date} ${fmtPrice(c.close_price)}` : fmtPrice(c.close_price);
+  const settleLabel =
+    c.settlement_date != null
+      ? `${c.settlement_date} ${fmtPrice(c.settlement_price)}`
+      : fmtPrice(c.settlement_price);
+  console.log(`${sym}  latest_close  ${closeLabel}  settlement ${settleLabel}  (${c.price_type ?? "n/a"})`);
+}
+
 const chart = await ChartSession.open({
   user,
   password,
@@ -55,9 +70,11 @@ const chart = await ChartSession.open({
   gatewayName: process.env.RITHMIC_GATEWAY,
 });
 
-chart.on("trade", logTrade);
-chart.on("quote", logQuote);
+// chart.on("trade", logTrade);
+// chart.on("quote", logQuote);
 chart.on("bar", logBar);
+chart.on("latest_high_low", logLatestHighLow);
+chart.on("latest_close", logLatestClose);
 chart.on("status", (s) => {
   if (process.env.RITHMIC_VERBOSE === "1") console.log("[status]", s);
 });
@@ -71,7 +88,7 @@ try {
   }
 
   console.log("\nLive feed (Ctrl+C to stop)…\n");
-  await chart.startLive();
+  await chart.startLive({ updateBits: MarketUpdatePreset.CHART });
 
   await new Promise((resolve) => {
     process.once("SIGINT", resolve);

@@ -114,7 +114,7 @@ Legacy names still work: `barCount`, `period`, `start_index`, `finish_index`.
 Load history **before** `startLive()` so replay finishes before live pumps start.
 
 ```js
-import { ChartSession, BarType } from "rithmic-api";
+import { ChartSession, BarType, MarketUpdatePreset } from "rithmic-api";
 
 const chart = await ChartSession.open({
   user: process.env.RITHMIC_USER,
@@ -130,12 +130,14 @@ const history = await chart.loadHistory({ barCount: 300 });
 chart.on("trade", (t) => console.log("last", t.price, t.size));
 chart.on("quote", (q) => console.log("bid/ask", q.bid, q.ask));
 chart.on("bar", (b) => console.log("bar", b.marker, b.close));
+chart.on("latest_high_low", (r) => console.log("high/low", r.high_price, r.low_price));
+chart.on("latest_close", (c) => console.log("close", c.close_price, c.settlement_price));
 chart.on("status", (s) => {
-  // merged snapshot: last, bid, ask, vwap, bar_close, …
+  // merged snapshot: last, bid, ask, latest_high, latest_low, latest_close, bar_close, …
 });
 
-// Default: 1-minute live bars on the history plant
-await chart.startLive();
+// Default: 1-minute live bars; CHART preset = quote + session high/low + close/settlement
+await chart.startLive({ updateBits: MarketUpdatePreset.CHART });
 
 // 1-second live bars (matches web app SECOND_BAR + period 1)
 await chart.startLive({
@@ -151,6 +153,8 @@ chart.close();
 |-------|---------------|----------------|
 | `trade` | 150 `LastTrade` | New **last trade** (`presence_bits` includes `LAST_TRADE`) |
 | `quote` | 151 `BestBidOffer` | Bid and/or ask updated (`BID` / `ASK` bits) |
+| `latest_high_low` | 152 `HighPriceLowPrice` | Session **high/low** snapshot |
+| `latest_close` | 155 `ClosePrice` | Session **close/settlement** snapshot |
 | `bar` | 250 `TimeBar` | Forming or closed **OHLC bar** for the subscribed resolution |
 | `status` | — | Merged snapshot after any tick/quote/bar update |
 
@@ -160,6 +164,8 @@ Normalized event fields:
 |-------|------------|
 | `trade` | `price`, `size`, `volume`, `vwap`, `net_change`, `presence_bits` |
 | `quote` | `bid`, `ask`, `bid_size`, `ask_size`, `lean`, `presence_bits` |
+| `latest_high_low` | `high_price`, `low_price`, `presence_bits`, `is_snapshot` |
+| `latest_close` | `close_price`, `close_date`, `settlement_price`, `settlement_date`, `price_type` |
 | `bar` | `open`, `high`, `low`, `close`, `marker`, `volume`, `num_trades`, `bid_volume`, `ask_volume` |
 
 #### Partial updates (`presence_bits`)
@@ -201,6 +207,8 @@ History: 300 bars
 
 NQ  Bid 30284.50 x 2  |  Ask 30285.75 x 1
 NQ  Last 30285.00 x 1  Buy
+NQ  latest_high_low  high 30362.00  low 30216.50
+NQ  latest_close  20260528 30313.00  settlement 20260528 30307.00  (final)
 NQ  Bar 5/28/2026, 8:22:00 PM  close 30288.75  vol 87
 ```
 
