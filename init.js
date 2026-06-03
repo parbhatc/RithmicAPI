@@ -33,7 +33,14 @@ export async function connect(options = {}) {
 export async function discover(systemName, options = {}) {
   await init();
 
-  const client1 = await connect({ ...options, label: "socket-1" });
+  const discoverOpts = {
+    timeoutMs: options.timeoutMs ?? 45_000,
+    connectRetries: options.connectRetries ?? 3,
+    uri: options.uri ?? MOBILE_URI,
+    log: options.log,
+  };
+
+  const client1 = await connect({ ...discoverOpts, label: "socket-1" });
   let gateways;
   try {
     gateways = await client1.exchange(
@@ -43,7 +50,7 @@ export async function discover(systemName, options = {}) {
     client1.close();
   }
 
-  const client2 = await connect({ ...options, label: "socket-2" });
+  const client2 = await connect({ ...discoverOpts, label: "socket-2" });
   let systems;
   try {
     systems = await client2.exchange(new RequestRithmicSystemInfo());

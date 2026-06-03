@@ -155,7 +155,8 @@ chart.close();
 | `quote` | 151 `BestBidOffer` | Bid and/or ask updated (`BID` / `ASK` bits) |
 | `latest_high_low` | 152 `HighPriceLowPrice` | Session **high/low** snapshot |
 | `latest_close` | 155 `ClosePrice` | Session **close/settlement** snapshot |
-| `bar` | 250 `TimeBar` | Forming or closed **OHLC bar** for the subscribed resolution |
+| `bar` | 250 `TimeBar` | **Closed** OHLC bar when a bucket finishes |
+| `formingBar` | — (built client-side) | Current **open** bucket from `LastTrade` + optional seed |
 | `status` | — | Merged snapshot after any tick/quote/bar update |
 
 Normalized event fields:
@@ -182,20 +183,86 @@ Rithmic often sends **incomplete** ticks — only the fields flagged in `presenc
 
 Use `chart.status` for a single merged view (last + bid/ask + bar close).
 
-#### Live `TimeBar` semantics
+#### `CandleLayer` — chart refresh without lagging one candle
 
-- `marker` = **bar open time** (Unix seconds, UTC) — the start of the bucket (e.g. `8:22:00 PM` for a 1m bar)
-- Same `marker` repeated → same candle still **forming** (OHLC/volume update)
-- `marker` advances → **new candle** (previous bucket closed)
-- For OHLC **close**, use `TimeBar.close` or `LastTrade.price` — not bid/ask (quotes update more often but are not traded price)
+Use when you need **correct forming OHLC** on refresh (not only on live ticks). Rithmic’s **1m history replay** can report wrong highs/lows in the open bucket; the layer fixes that with a **tick replay** over the 1m tail before rolling up higher timeframes.
+
+**Minute+ flow** (`load1m({ alsoFor: [15] })`):
+
+```
+At 4:42 PM, viewing 15m:
+  1. Native 15m replay (include_forming: false) → completed bars through 4:15
+  2. 1m replay from 4:30 → now (~15 bars), not 300×1m
+  3. Tick replay over that 1m tail → correct OHLC per minute
+  4. Forming 15m = rollup of tick-refined 1m + forming 1m
+```
+
+| Resolution | Closed bars | Open bucket |
+|------------|-------------|-------------|
+| **15m, 60m, 1D, …** | Native Rithmic replay | Derived from 1m tail |
+| **1m** | Tick-refined replay (or full countback if `alsoFor` is only `1`) | `seedForming1m` / tick refine |
+
+**Defaults:** `loadHistory` and `load1m` use `include_forming: false` unless you opt in.
+
+```javascript
+import { ChartSession, CandleLayer, MarketUpdatePreset } from "rithmic-api";
+
+const chart = await ChartSession.open({ user, password, systemName: "LucidTrading", symbol: "NQ", exchange: "CME" });
+const layer = new CandleLayer(chart);
+
+await layer.load1m({
+  alsoFor: [15],           // native completed 15m + 1m tail for open bucket
+  countback: 25,             // native HTF bar count
+  include_forming: true,     // forming 15m + forming 1m
+  tickOpen: true,            // tick-refine 1m tail (default true)
+});
+
+const closed15 = layer.getClosed(15);   // rithmic-native, through last completed bucket
+const forming15 = layer.getForming(15); // 1m-derived+tick-bucket-open
+const series15 = layer.getSeries(15);   // closed + forming
+
+// Live: ticks → forming 1m only; re-read higher TF after each trade
+await chart.startLive({
+  updateBits: MarketUpdatePreset.QUOTE,
+  exactBar: layer.forming1m,
+  exactFormingBar: false,
+});
+chart.on("trade", (t) => {
+  layer.onTrade(t);
+  const bar = layer.getForming(15);
+});
+```
+
+`ChartState` is an alias for `CandleLayer`. **Seconds** (`5S` … `45S`) and **tick charts** (`100T`) use a separate path (`resolveDataLayer`) and do not use this 1m store.
+
+**Try it:**
+
+```bash
+npm run example:forming-15m
+RITHMIC_TIME_RESOLUTION=1 npm run example:forming-15m   # 1m only
+RITHMIC_INCLUDE_FORMING=0 npm run example:forming-15m # closed only
+RITHMIC_START_LIVE=1 npm run example:forming-15m      # live forming updates
+```
+
+See `examples/README.md` for all scripts.
+
+#### Live `TimeBar` vs forming candle
+
+- `TimeBar` (250) on **1m** closes the minute; higher TFs are not subscribed independently.
+- `marker` = **bar open time** (Unix seconds, UTC).
+- For OHLC **close** while forming, use `LastTrade.price`; when the bucket closes, `TimeBar.close` matches the finalized bar.
 
 Bid = buy side of the book. Ask = sell side. `Last … Buy/Sell` is the **aggressor** on that print, not a different close type.
 
 #### Examples
 
 ```bash
-npm run example:bars    # history replay only
-npm run example:chart   # history + live (Ctrl+C to exit)
+npm run example              # discover gateways
+npm run example:bars         # time-bar replay (low-level)
+npm run example:chart        # history + live quotes/bars
+npm run example:test-bars    # loadHistory compat arrays
+npm run example:forming-15m  # CandleLayer forming OHLC (15m default, any minute TF)
+npm run example:tick-bars    # tick-bar replay
 ```
 
 `examples/live-chart.js` prints readable lines like:
@@ -317,6 +384,9 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 | `barsToHistoryPayload(bars)` | Normalized bars → `{ s, t, o, h, l, c, v }` |
 | `ChartSession` | Dual-plant chart session (`open`, `loadHistory`, `startLive`, events) |
 | `ChartSession.open(options)` | Connect ticker + history |
+| `CandleLayer` | Canonical 1m store + native HTF completed + tick-refined forming rollup |
+| `CandleLayer.load1m`, `getClosed`, `getForming`, `getSeries`, `onTrade` | See forming-candle section above |
+| `ChartState` | Alias for `CandleLayer` |
 | `normalizeBar` / `normalizeTrade` / `normalizeQuote` | Packet → plain objects (respects `presence_bits`) |
 | `mergeTick` | Merge partial quote/trade updates |
 | `BarType`, `MarketUpdateBits`, `MarketUpdatePreset`, `LastTradePresence`, `BestBidOfferPresence`, … | Wire enums |
@@ -330,7 +400,7 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 |--------|---------|-------------|
 | `uri` | mobile discovery URL | WebSocket endpoint (use gateway URI from `discover()`) |
 | `log` | `false` | Log send/recv |
-| `timeoutMs` | `15000` | Per-read timeout |
+| `timeoutMs` | `30000` | Connect / per-read timeout |
 
 ### Environment (examples)
 
@@ -339,7 +409,11 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 | `RITHMIC_USER` / `RITHMIC_PASSWORD` | Login |
 | `RITHMIC_SYSTEM` | e.g. `LucidTrading` |
 | `RITHMIC_SYMBOL` / `RITHMIC_EXCHANGE` | e.g. `NQ` / `CME` |
-| `RITHMIC_BAR_COUNT` | History length for examples |
+| `RITHMIC_BAR_COUNT` | History length for `live-chart` / `time-bars-replay` |
+| `RITHMIC_TIME_RESOLUTION` | Chart TF for `example:forming-15m` (default `15`) |
+| `RITHMIC_TIME_BAR_COUNT` | Native HTF countback for `CandleLayer` (default `25`) |
+| `RITHMIC_INCLUDE_FORMING` | `0` = closed only; example defaults to forming on |
+| `RITHMIC_START_LIVE` | `1` = subscribe trades in `example:forming-15m` |
 | `RITHMIC_GATEWAY` | Optional gateway name filter |
 | `RITHMIC_VERBOSE` | Set to `1` in `live-chart` for merged `status` logs |
 
@@ -351,7 +425,7 @@ init.js / Session.js / Client.js
 lib/              templates, proto loader, market enums/views
 protocol/         Packet subclasses (generated + core)
 proto/            rithmic.proto, session.proto, async/*.proto
-examples/         handshake, gateway-session, time-bars-replay, live-chart
+examples/         handshake, live-chart, test-forming-15m (CandleLayer), … — see examples/README.md
 tools/            decode.js, generate-packets.mjs, download-protos.mjs
 extension/        Chrome sniffer (optional, gitignored in some setups)
 ```

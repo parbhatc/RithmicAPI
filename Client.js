@@ -4,11 +4,20 @@ import { toPlain } from "./lib/util.js";
 
 export const MOBILE_URI = "wss://rprotocol-mobile.rithmic.com/";
 
+const CONNECT_RETRYABLE = /timed out|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET/i;
+
 export class Client {
-  constructor({ uri = MOBILE_URI, label = "Rithmic", timeoutMs = 15_000, log = false } = {}) {
+  constructor({
+    uri = MOBILE_URI,
+    label = "Rithmic",
+    timeoutMs = 30_000,
+    connectRetries = 3,
+    log = false,
+  } = {}) {
     this.uri = uri;
     this.label = label;
     this.timeoutMs = timeoutMs;
+    this.connectRetries = connectRetries;
     this.log = log;
     this.ws = null;
   }
@@ -21,11 +30,43 @@ export class Client {
   async connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
-    this.ws = await new Promise((resolve, reject) => {
+    const attempts = Math.max(1, this.connectRetries);
+    let lastErr;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        this.ws = await this.#openSocket();
+        break;
+      } catch (err) {
+        lastErr = err;
+        const retryable =
+          attempt < attempts && CONNECT_RETRYABLE.test(String(err?.message ?? err));
+        if (!retryable) throw err;
+        if (this.log) {
+          console.log(
+            `[${this.label}] connect attempt ${attempt}/${attempts} failed: ${err.message}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
+    if (!this.ws) throw lastErr;
+
+    this.ws.on("message", (data, isBinary) => {
+      if (!isBinary) return;
+      const frame = Buffer.from(data);
+      if (this.#recvWaiters.length) this.#recvWaiters.shift()(frame);
+      else this.#recvQueue.push(frame);
+    });
+
+    if (this.log) console.log(`[${this.label}] connected`);
+  }
+
+  #openSocket() {
+    return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.uri, { perMessageDeflate: false });
       const timer = setTimeout(() => {
         ws.terminate();
-        reject(new Error(`${this.label}: connect timed out`));
+        reject(new Error(`${this.label}: connect timed out (${this.uri})`));
       }, this.timeoutMs);
 
       ws.once("open", () => {
@@ -37,15 +78,6 @@ export class Client {
         reject(err);
       });
     });
-
-    this.ws.on("message", (data, isBinary) => {
-      if (!isBinary) return;
-      const frame = Buffer.from(data);
-      if (this.#recvWaiters.length) this.#recvWaiters.shift()(frame);
-      else this.#recvQueue.push(frame);
-    });
-
-    if (this.log) console.log(`[${this.label}] connected`);
   }
 
   send(packet) {
