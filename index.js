@@ -20,6 +20,7 @@ export {
   isIsolatedResolution,
   countback1mForResolutions,
   countback1mTail,
+  periodSecondsFor,
   resolutionKey,
   deriveFormingFrom1m,
   deriveClosedFrom1m,

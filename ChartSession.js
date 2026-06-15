@@ -257,20 +257,20 @@ export class ChartSession extends EventEmitter {
     } = options;
     const q = resolveHistoryQuery(queryOpts);
     const msg = userMsg(this.symbol, this.exchange);
-    const replayRange = async (start_index, finish_index) => {
-      this.#history.send(
-        new RequestTimeBarReplay({
-          symbol: this.symbol,
-          exchange: this.exchange,
-          user_msg: [msg],
-          bar_type: q.barType,
-          bar_type_period: q.barTypePeriod,
-          start_index,
-          finish_index,
-          direction: ReplayDirection.LAST,
-          time_order: ReplayTimeOrder.FORWARDS,
-        }),
-      );
+    const replayRange = async (start_index, finish_index, user_max_count) => {
+      const body = {
+        symbol: this.symbol,
+        exchange: this.exchange,
+        user_msg: [msg],
+        bar_type: q.barType,
+        bar_type_period: q.barTypePeriod,
+        start_index,
+        finish_index,
+        direction: ReplayDirection.LAST,
+        time_order: ReplayTimeOrder.FORWARDS,
+      };
+      if (user_max_count != null) body.user_max_count = user_max_count;
+      this.#history.send(new RequestTimeBarReplay(body));
 
       const out = [];
       const deadline = Date.now() + timeoutMs;
@@ -296,26 +296,43 @@ export class ChartSession extends EventEmitter {
         ? null
         : q.countback + (payload && compat ? 1 : 0);
 
-    // If caller asked for countback and the explicit range is too short, backfill older bars.
+    // Countback: backfill older bars across session gaps (empty replays widen the search).
     if (targetCount != null && bars.length > 0 && bars.length < targetCount) {
+      let span = Math.max(
+        (targetCount - bars.length) * q.periodSeconds * 2,
+        q.periodSeconds * 120,
+      );
+      const maxSpan = 14 * 86_400;
+      let stagnant = 0;
       let loops = 0;
-      while (bars.length < targetCount && loops < 8) {
+
+      while (bars.length < targetCount && loops < 20) {
         loops++;
         const firstMarker = Number(bars[0]?.marker ?? q.start_index);
-        const needed = targetCount - bars.length;
-        const span = Math.max(needed * q.periodSeconds * 2, q.periodSeconds * 120);
+        if (stagnant > 0) span = Math.min(span * 3, maxSpan);
         const extraStart = Math.floor(firstMarker - span);
         const extraEnd = Math.floor(firstMarker - q.periodSeconds);
         if (extraEnd <= extraStart) break;
 
         const older = await replayRange(extraStart, extraEnd);
-        if (!older.length) break;
+        if (!older.length) {
+          stagnant++;
+          if (stagnant >= 8) break;
+          continue;
+        }
 
         const seen = new Set(bars.map((b) => Number(b.marker)));
         const uniqueOlder = older.filter((b) => !seen.has(Number(b.marker)));
-        if (!uniqueOlder.length) break;
+        if (!uniqueOlder.length) {
+          stagnant++;
+          if (stagnant >= 8) break;
+          continue;
+        }
 
-        bars = [...uniqueOlder, ...bars];
+        stagnant = 0;
+        bars = [...uniqueOlder, ...bars].sort(
+          (a, b) => Number(a.marker) - Number(b.marker),
+        );
       }
 
       if (bars.length > targetCount) {

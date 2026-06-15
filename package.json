@@ -24,6 +24,7 @@
     "example:test-bars": "node --env-file=.env examples/test-get-bars.mjs",
     "example:forming-15m": "node --env-file=.env examples/test-forming-15m.mjs",
     "example:forming": "node --env-file=.env examples/test-forming-15m.mjs",
+    "example:tv-15m": "node --env-file=.env examples/test-tv-history-15m.mjs",
     "example:tick-bars": "node --env-file=.env examples/tick-bars-replay.mjs",
     "example:match-100t": "node --env-file=.env examples/match-100t-chart.mjs",
     "decode": "node tools/decode.js",

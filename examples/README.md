@@ -10,6 +10,7 @@ Copy `.env.example` to `.env` and set `RITHMIC_USER` / `RITHMIC_PASSWORD`.
 | `live-chart.js` | `npm run example:chart` | History + live quote/bar events |
 | `test-get-bars.mjs` | `npm run example:test-bars` | `loadHistory` compat payload (no layer) |
 | `test-forming-15m.mjs` | `npm run example:forming-15m` | **`CandleLayer`** — forming OHLC, any minute TF |
+| `test-tv-history-15m.mjs` | `npm run example:tv-15m` | TradingView-style `GET /api/rithmic/history` (`to`=now+60s) |
 | `tick-bars-replay.mjs` | `npm run example:tick-bars` | Tick-bar history replay |
 | `match-100t-chart.mjs` | `npm run example:match-100t` | 100-tick chart comparison |
 
@@ -32,3 +33,14 @@ RITHMIC_START_LIVE=1 npm run example:forming-15m
 ```
 
 Optional: `RITHMIC_TIME_BAR_COUNT`, `RITHMIC_SYMBOL`, `RITHMIC_EXCHANGE`, `RITHMIC_GATEWAY`.
+
+## TradingView history query (`test-tv-history-15m.mjs`)
+
+Same query params as TV (`from`, `to`=now+60s, `countback=300`, `include_forming`). **CandleLayer only** — prints latest closed + **current forming** 15m bar.
+
+```bash
+npm run example:tv-15m
+RITHMIC_START_LIVE=1 npm run example:tv-15m
+```
+
+Env: `RITHMIC_COUNTBACK` (default `300`), `RITHMIC_TIME_RESOLUTION` (default `15`).
