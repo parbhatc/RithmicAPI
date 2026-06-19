@@ -16,7 +16,6 @@ import {
   BestBidOffer,
   ClosePrice,
   HighPriceLowPrice,
-  OpeningPrice,
   TimeBar,
 } from "./protocol/index.js";
 import {
@@ -37,7 +36,6 @@ import {
   normalizeQuote,
   normalizeClosePrice,
   normalizeHighLow,
-  normalizeOpeningPrice,
   mergeTick,
   chartStatus,
 } from "./lib/market-views.js";
@@ -47,7 +45,9 @@ import {
   barsToHistoryPayload,
   aggregateTickBars,
   trimCountbackBars,
+  applyCompatBars,
 } from "./lib/history-query.js";
+import { is1mFormingDebug, log1m, log1mBars } from "./lib/forming-1m-debug.js";
 import {
   aggregateReplayOHLC,
   applyTradeToFormingBar,
@@ -83,15 +83,23 @@ function hasBit(bits, flag) {
   return ((bits ?? 0) & flag) !== 0;
 }
 
+function normalizeGatewayUri(uri) {
+  if (!uri) return uri;
+  return uri.replace(
+    /^wss:\/\/rprotocol-mobile\.rithmic\.com:443\/?$/,
+    "wss://rprotocol-mobile.rithmic.com/",
+  );
+}
+
 async function resolveGatewayUri({ systemName, uri, gatewayName }) {
-  if (uri) return uri;
+  if (uri) return normalizeGatewayUri(uri);
   const { gateways } = await discover(systemName, { timeoutMs: 45_000, connectRetries: 3 });
   if (gatewayName) {
     const match = gateways.find((g) => g.name.includes(gatewayName));
-    if (match) return match.uri;
+    if (match) return normalizeGatewayUri(match.uri);
   }
   const chicago = gateways.find((g) => /chicago/i.test(g.name));
-  return (chicago ?? gateways[0]).uri;
+  return normalizeGatewayUri((chicago ?? gateways[0]).uri);
 }
 
 async function loginPlant(client, credentials, infraType) {
@@ -119,7 +127,6 @@ async function loginPlant(client, credentials, infraType) {
  * - `trade` — LastTrade (150)
  * - `quote` — BestBidOffer (151)
  * - `latest_high_low` — HighPriceLowPrice (152)
- * - `latest_open` — OpeningPrice (153)
  * - `latest_close` — ClosePrice (155)
  * - `bar` — TimeBar (250) when a bucket **closes** (not while forming)
  * - `formingBar` — current open bucket built from LastTrade (+ optional seed)
@@ -136,7 +143,6 @@ export class ChartSession extends EventEmitter {
   #quote = null;
   #bar = null;
   #latestHighLow = null;
-  #latestOpen = null;
   #latestClose = null;
   #liveBarType = null;
   #liveBarPeriod = null;
@@ -159,7 +165,6 @@ export class ChartSession extends EventEmitter {
       trade: this.#trade,
       quote: this.#quote,
       bar: this.#bar,
-      latestOpen: this.#latestOpen,
       latestHighLow: this.#latestHighLow,
       latestClose: this.#latestClose,
     });
@@ -201,13 +206,15 @@ export class ChartSession extends EventEmitter {
       label: "ticker",
       log: false,
       timeoutMs: 45_000,
-      connectRetries: 3,
+      connectRetries: 5,
     });
+    await new Promise((r) => setTimeout(r, 500));
     this.#history = await connect({
       uri: this.uri,
       label: "history",
       log: false,
       timeoutMs: 180_000,
+      connectRetries: 5,
     });
 
     await loginPlant(this.#ticker, credentials, InfraType.TICKER_PLANT);
@@ -295,9 +302,7 @@ export class ChartSession extends EventEmitter {
     };
 
     const targetCount =
-      q.countback == null
-        ? null
-        : q.countback + (payload && compat ? 1 : 0);
+      q.countback == null ? null : q.countback + (compat ? 1 : 0);
 
     let bars = await replayRange(
       q.start_index,
@@ -356,9 +361,30 @@ export class ChartSession extends EventEmitter {
     if (!include_forming) {
       const { closed } = splitHistoryForForming(bars, q.periodSeconds);
       bars = closed;
+    } else if (bars.length) {
+      bars[bars.length - 1].forming = true;
     }
 
-    if (payload) return barsToHistoryPayload(bars, { timeOffset, compat });
+    if (is1mFormingDebug() && q.periodSeconds === 60) {
+      log1m(
+        "loadHistory.preCompat",
+        `res=1m compat=${compat} include_forming=${include_forming} countback=${q.countback ?? "—"} raw=${bars.length}`,
+      );
+      log1mBars("loadHistory.preCompat.bars", bars, { tail: 6 });
+    }
+
+    if (compat && bars.length > 1) {
+      bars = applyCompatBars(bars);
+      if (targetCount != null && bars.length > q.countback) {
+        bars = bars.slice(-q.countback);
+      }
+      if (is1mFormingDebug() && q.periodSeconds === 60) {
+        log1m("loadHistory.postCompat", `bars=${bars.length}`);
+        log1mBars("loadHistory.postCompat.bars", bars, { tail: 6 });
+      }
+    }
+
+    if (payload) return barsToHistoryPayload(bars, { timeOffset, compat: false });
     return bars;
   }
 
@@ -935,9 +961,9 @@ export class ChartSession extends EventEmitter {
 
     if (tickOpen) {
       const tickEnd = Math.max(now + 1, bucket + ONE_MINUTE_PERIOD);
-      const fromTicks = await this.replay1mFromTicks(bucket, tickEnd, { timeoutMs });
-      if (fromTicks) {
-        return { ...fromTicks, forming: true, replaySource: "1m-tick-refined" };
+      const from1s = await this.replay1mFrom1s(bucket, tickEnd, { timeoutMs });
+      if (from1s) {
+        return { ...from1s, forming: true, replaySource: "1m-1s-refined" };
       }
     }
 
@@ -1005,17 +1031,91 @@ export class ChartSession extends EventEmitter {
   }
 
   /**
-   * First trade price in `[fromSec, toSec)` — used once per HTF bucket (first minute only).
+   * Rebuild 1m bars from 1-second TimeBar history (preferred over tick replay for 1m).
+   * @returns {Promise<object[]>}
    */
-  async firstTickPriceInRange(fromSec, toSec, { timeoutMs = 45_000 } = {}) {
+  async replay1mBarsFrom1s(fromSec, toSec, { timeoutMs = 45_000 } = {}) {
+    const from = Math.floor(fromSec);
+    const to = Math.ceil(toSec);
+    const minuteFrom = bucketOpen(from, ONE_MINUTE_PERIOD);
+    const span = Math.max(60, to - minuteFrom + 1);
+    const countback = Math.min(900, span + 10);
+
+    const bars1s = await this.loadHistory({
+      resolution: "1S",
+      from: minuteFrom,
+      to,
+      countback,
+      include_forming: true,
+      timeoutMs,
+    });
+
+    const buckets = new Map();
+    for (const b of bars1s) {
+      const t = Number(b.marker);
+      if (!Number.isFinite(t) || t < minuteFrom || t >= to) continue;
+      const marker = bucketOpen(t, ONE_MINUTE_PERIOD);
+      if (!buckets.has(marker)) buckets.set(marker, []);
+      buckets.get(marker).push(b);
+    }
+
+    const out = [];
+    for (const marker of [...buckets.keys()].sort((a, b) => a - b)) {
+      const bar = aggregateReplayOHLC(buckets.get(marker), {
+        marker,
+        periodSeconds: ONE_MINUTE_PERIOD,
+        symbol: this.symbol,
+        exchange: this.exchange,
+      });
+      if (bar) {
+        out.push({ ...bar, forming: false, replaySource: "1m-1s-refined" });
+      }
+    }
+    return out;
+  }
+
+  /** @returns {Promise<object|null>} */
+  async replay1mFrom1s(fromSec, toSec, opts = {}) {
+    const bars = await this.replay1mBarsFrom1s(fromSec, toSec, opts);
+    const target = bucketOpen(Math.floor(fromSec), ONE_MINUTE_PERIOD);
+    return bars.find((b) => Number(b.marker) === target) ?? null;
+  }
+
+  /**
+   * First 1s bar open in `[fromSec, toSec)` — bucket open for 1m / HTF first minute.
+   */
+  async first1sOpenInRange(fromSec, toSec, { timeoutMs = 45_000, windowSeconds } = {}) {
     const from = Math.floor(fromSec);
     const to = Math.floor(toSec);
+    const span = Math.max(10, Math.min(windowSeconds ?? 75, to - from + 5));
+    const bars1s = await this.loadHistory({
+      resolution: "1S",
+      from,
+      to: Math.min(to, from + span),
+      countback: Math.min(120, span + 5),
+      include_forming: true,
+      timeoutMs,
+    });
+    const first = [...bars1s]
+      .filter((b) => Number(b.marker) >= from)
+      .sort((a, b) => Number(a.marker) - Number(b.marker))[0];
+    const price = Number(first?.open ?? first?.close);
+    return isUsablePrice(price) ? price : null;
+  }
+
+  /**
+   * First trade price in `[fromSec, toSec)` — used once per HTF bucket (first minute only).
+   */
+  async firstTickPriceInRange(fromSec, toSec, { timeoutMs = 45_000, windowSeconds } = {}) {
+    const from = Math.floor(fromSec);
+    const to = Math.floor(toSec);
+    const span = Math.max(30, to - from + 10);
     const ticks = await this.loadTickHistory({
       from,
       to,
       barTypeSpecifier: "1",
       timeoutMs,
-      windowSeconds: Math.max(120, to - from + 30),
+      windowSeconds: windowSeconds ?? Math.min(90, span),
       direction: ReplayDirection.FIRST,
       time_order: ReplayTimeOrder.FORWARDS,
     });
@@ -1374,12 +1474,6 @@ export class ChartSession extends EventEmitter {
     if (packet instanceof HighPriceLowPrice) {
       this.#latestHighLow = normalizeHighLow(packet);
       this.emit("latest_high_low", this.#latestHighLow);
-      this.emit("status", this.status);
-      return;
-    }
-    if (packet instanceof OpeningPrice) {
-      this.#latestOpen = normalizeOpeningPrice(packet);
-      this.emit("latest_open", this.#latestOpen);
       this.emit("status", this.status);
       return;
     }

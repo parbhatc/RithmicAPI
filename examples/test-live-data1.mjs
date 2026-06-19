@@ -1,5 +1,5 @@
 /**
- * Live test: session snapshots (152/153/155) + TimeBar forming/closed for a resolution.
+ * Live test: session snapshots (152/155) + TimeBar forming/closed for a resolution.
  *
  * Env: RITHMIC_USER, RITHMIC_PASSWORD (+ optional RITHMIC_* in .env)
  *   RITHMIC_RESOLUTION   Minutes for live bar subscribe (default 15)
@@ -25,7 +25,7 @@ const fmtPrice = (n) => (n == null ? "—" : Number(n).toFixed(2));
 const fmtTime = (sec) =>
   sec == null ? "—" : new Date(Number(sec) * 1000).toLocaleString();
 
-const seen = { open: false, highLow: false, close: false, formingBar: false, closedBar: false };
+const seen = { highLow: false, close: false, formingBar: false, closedBar: false };
 
 const chart = await ChartSession.open({
   user,
@@ -34,13 +34,6 @@ const chart = await ChartSession.open({
   symbol,
   exchange,
   gatewayName: process.env.RITHMIC_GATEWAY,
-});
-
-chart.on("latest_open", (o) => {
-  seen.open = true;
-  console.log(
-    `${o.symbol ?? symbol}  latest_open (153)  open ${fmtPrice(o.open_price)}  snapshot=${o.is_snapshot}`,
-  );
 });
 
 chart.on("latest_high_low", (r) => {
@@ -79,7 +72,7 @@ try {
   console.log(`Local time now:     ${new Date().toLocaleString()}  (unix ${nowSec})`);
   console.log(`Open ${resolution}m bucket: ${fmtTime(bucket)}  (unix ${bucket})`);
   console.log(`Symbol:             ${symbol}@${exchange}`);
-  console.log(`Ticker bits:        MarketUpdatePreset.CHART (150–155 incl. open/high-low/close)`);
+  console.log(`Ticker bits:        MarketUpdatePreset.CHART (150–152, 155 incl. high-low/close)`);
   console.log(`History bar sub:    MINUTE_BAR period ${barTypePeriod}  (${periodSeconds}s buckets)\n`);
 
   const t0 = Date.now();
@@ -94,19 +87,13 @@ try {
   await new Promise((resolve) => setTimeout(resolve, timeoutMs));
 
   console.log("\n--- summary ---");
-  console.log(`OpeningPrice (153):      ${seen.open ? "received" : "NOT received"}`);
   console.log(`HighPriceLowPrice (152): ${seen.highLow ? "received" : "NOT received"}`);
   console.log(`ClosePrice (155):        ${seen.close ? "received" : "NOT received"}`);
   console.log(`formingBar (250 open):   ${seen.formingBar ? "received" : "NOT received"}`);
   console.log(`bar (250 closed):        ${seen.closedBar ? "received (bucket rolled during wait)" : "none (normal unless bucket closes)"}`);
-  if (chart.status.latest_open != null) {
-    console.log(`Cached daily open:       ${fmtPrice(chart.status.latest_open)}`);
-  }
   if (chart.status.bar_close != null) {
     console.log(`Latest bar close:        ${fmtPrice(chart.status.bar_close)}  marker ${fmtTime(chart.status.bar_marker)}`);
   }
-
-  if (!seen.open) process.exitCode = 1;
 } finally {
   await chart.stopLive();
   chart.close();

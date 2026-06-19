@@ -62,6 +62,11 @@ export {
   NATIVE_PARTIAL_FROM_SEC,
 } from "./lib/forming-strategy.js";
 export {
+  FormingSubSource,
+  formingSubSource,
+  formingBootstrapMode,
+} from "./lib/forming-source.js";
+export {
   CandleLayer,
   ONE_MINUTE_PERIOD,
   isCanonicalResolution,

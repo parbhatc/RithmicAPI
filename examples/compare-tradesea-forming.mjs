@@ -38,7 +38,7 @@ const CONNECTION_USER_ID =
   "dDqVtke0T1bbMKI-g6JpZKpOT1FCUzI5NzQ2omV1q0xULTFYRDgxWjlEoWSDonNurEx1Y2lkVHJhZGluZ6NmY22sTHVjaWRUcmFkaW5nomlirEx1Y2lkVHJhZGluZw";
 const CONNECTION_GROUP_ID =
   process.env.TRADESEA_CONNECTION_GROUP_ID ??
-  "6c1e6cb7bff88283b854e92fcf5aa9eda70a33e728f6875015d2a8e36217b265";
+  "9ab078c1665d83855967508f934e74da32f1bc08e6b1ae93760db21324daca22";
 
 const symbol = process.env.RITHMIC_SYMBOL ?? "NQ";
 const exchange = process.env.RITHMIC_EXCHANGE ?? "CME";
@@ -112,7 +112,8 @@ const chart = await ChartSession.open({
   systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
   symbol,
   exchange,
-  gatewayName: process.env.RITHMIC_GATEWAY,
+  uri: process.env.RITHMIC_URI,
+  gatewayName: process.env.RITHMIC_URI ? undefined : process.env.RITHMIC_GATEWAY,
 });
 const connectMs = performance.now() - tConnect;
 
@@ -145,6 +146,7 @@ const bootMs = performance.now() - tBoot;
 const tRef = performance.now();
 const ref = await fetchTradeSeaReference({
   accessToken: TRADESEA_TOKEN,
+  refreshToken: process.env.TRADESEA_REFRESH_TOKEN,
   connectionUserId: CONNECTION_USER_ID,
   connectionGroupId: CONNECTION_GROUP_ID,
   streamSymbol: STREAM_SYMBOL,
@@ -227,8 +229,6 @@ if (!allPass && pass === RESOLUTIONS.length) {
 if (pass < RESOLUTIONS.length) {
   console.log(`
 Tips to improve Rithmic-only match:
-  • Set TRADESEA_WEEKLY_ADJUST=302 (or run calibrate once) for 1W
-  • Ensure templates 152/153 arrive (accuracy mode waits for session snapshots)
   • Compare at same instant — intraday close drifts with live market
   • Run: accuracy:'tradesea' bootstrap + attachRithmicAccuracy (default in bootstrapRithmicAccuracy)
 `);

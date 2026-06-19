@@ -4,7 +4,7 @@ import { toPlain } from "./lib/util.js";
 
 export const MOBILE_URI = "wss://rprotocol-mobile.rithmic.com/";
 
-const CONNECT_RETRYABLE = /timed out|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET/i;
+const CONNECT_RETRYABLE = /timed out|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|401|permission denied/i;
 
 export class Client {
   constructor({
