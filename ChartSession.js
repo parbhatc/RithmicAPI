@@ -16,6 +16,7 @@ import {
   BestBidOffer,
   ClosePrice,
   HighPriceLowPrice,
+  OpeningPrice,
   TimeBar,
 } from "./protocol/index.js";
 import {
@@ -36,6 +37,7 @@ import {
   normalizeQuote,
   normalizeClosePrice,
   normalizeHighLow,
+  normalizeOpeningPrice,
   mergeTick,
   chartStatus,
 } from "./lib/market-views.js";
@@ -117,6 +119,7 @@ async function loginPlant(client, credentials, infraType) {
  * - `trade` — LastTrade (150)
  * - `quote` — BestBidOffer (151)
  * - `latest_high_low` — HighPriceLowPrice (152)
+ * - `latest_open` — OpeningPrice (153)
  * - `latest_close` — ClosePrice (155)
  * - `bar` — TimeBar (250) when a bucket **closes** (not while forming)
  * - `formingBar` — current open bucket built from LastTrade (+ optional seed)
@@ -133,6 +136,7 @@ export class ChartSession extends EventEmitter {
   #quote = null;
   #bar = null;
   #latestHighLow = null;
+  #latestOpen = null;
   #latestClose = null;
   #liveBarType = null;
   #liveBarPeriod = null;
@@ -155,6 +159,7 @@ export class ChartSession extends EventEmitter {
       trade: this.#trade,
       quote: this.#quote,
       bar: this.#bar,
+      latestOpen: this.#latestOpen,
       latestHighLow: this.#latestHighLow,
       latestClose: this.#latestClose,
     });
@@ -289,12 +294,20 @@ export class ChartSession extends EventEmitter {
       return out;
     };
 
-    let bars = await replayRange(q.start_index, q.finish_index);
-
     const targetCount =
       q.countback == null
         ? null
         : q.countback + (payload && compat ? 1 : 0);
+
+    let bars = await replayRange(
+      q.start_index,
+      q.finish_index,
+      targetCount != null ? targetCount : undefined,
+    );
+
+    if (targetCount != null && bars.length > targetCount) {
+      bars = bars.slice(-targetCount);
+    }
 
     // Countback: backfill older bars across session gaps (empty replays widen the search).
     if (targetCount != null && bars.length > 0 && bars.length < targetCount) {
@@ -1160,10 +1173,11 @@ export class ChartSession extends EventEmitter {
   } = {}) {
     if (this.#live) return;
     const msg = userMsg(this.symbol, this.exchange);
+    const livePeriodSeconds = periodSecondsFromBarType(barType, barPeriod);
 
-    this.#liveBarType = BarType.MINUTE_BAR;
-    this.#liveBarPeriod = 1;
-    this.#formingPeriodSeconds = ONE_MINUTE_PERIOD;
+    this.#liveBarType = barType;
+    this.#liveBarPeriod = barPeriod;
+    this.#formingPeriodSeconds = livePeriodSeconds;
 
     let exactBar = exactBarIn;
     let replaySource = exactBarIn ? "provided" : null;
@@ -1215,8 +1229,8 @@ export class ChartSession extends EventEmitter {
         exchange: this.exchange,
         user_msg: [msg],
         request: SubscribeRequest.SUBSCRIBE,
-        bar_type: BarType.MINUTE_BAR,
-        bar_type_period: 1,
+        bar_type: barType,
+        bar_type_period: barPeriod,
       }),
     );
 
@@ -1327,14 +1341,15 @@ export class ChartSession extends EventEmitter {
       return;
     }
     if (packet instanceof TimeBar) {
-      const bar = normalizeBar(packet, { defaultPeriod: ONE_MINUTE_PERIOD });
+      const periodSec = this.#formingPeriodSeconds ?? ONE_MINUTE_PERIOD;
+      const bar = normalizeBar(packet, { defaultPeriod: periodSec });
       const now = Math.floor(Date.now() / 1000);
-      const open1m = bucketOpen(now, ONE_MINUTE_PERIOD);
+      const currentOpen = bucketOpen(now, periodSec);
       const m = Number(bar.marker);
 
-      if (m === open1m) {
+      if (m === currentOpen) {
         const next = mergeFormingFromTimeBar(this.#formingBar, bar, {
-          periodSeconds: ONE_MINUTE_PERIOD,
+          periodSeconds: periodSec,
         });
         if (next) {
           this.#formingBar = next;
@@ -1346,7 +1361,7 @@ export class ChartSession extends EventEmitter {
         return;
       }
 
-      if (m === open1m - ONE_MINUTE_PERIOD) {
+      if (m === currentOpen - periodSec) {
         bar.forming = false;
         this.#bar = bar;
         this.emit("bar", bar);
@@ -1359,6 +1374,12 @@ export class ChartSession extends EventEmitter {
     if (packet instanceof HighPriceLowPrice) {
       this.#latestHighLow = normalizeHighLow(packet);
       this.emit("latest_high_low", this.#latestHighLow);
+      this.emit("status", this.status);
+      return;
+    }
+    if (packet instanceof OpeningPrice) {
+      this.#latestOpen = normalizeOpeningPrice(packet);
+      this.emit("latest_open", this.#latestOpen);
       this.emit("status", this.status);
       return;
     }

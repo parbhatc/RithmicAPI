@@ -10,6 +10,7 @@ export { ResponseMarketDataUpdate } from "./ResponseMarketDataUpdate.js";
 export { LastTrade } from "./LastTrade.js";
 export { BestBidOffer } from "./BestBidOffer.js";
 export { HighPriceLowPrice } from "./HighPriceLowPrice.js";
+export { OpeningPrice } from "./OpeningPrice.js";
 export { ClosePrice } from "./ClosePrice.js";
 export { OrderBook } from "./OrderBook.js";
 export { MarketMode } from "./MarketMode.js";

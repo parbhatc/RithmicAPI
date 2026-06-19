@@ -46,6 +46,11 @@ function logBar(b) {
   console.log(`${sym}  Bar ${fmtTime(b.marker)}  close ${fmtPrice(b.close)}  vol ${fmtQty(b.volume)}`);
 }
 
+function logLatestOpen(o) {
+  const sym = o.symbol ?? symbol;
+  console.log(`${sym}  latest_open  open ${fmtPrice(o.open_price)}`);
+}
+
 function logLatestHighLow(r) {
   const sym = r.symbol ?? symbol;
   console.log(`${sym}  latest_high_low  high ${fmtPrice(r.high_price)}  low ${fmtPrice(r.low_price)}`);
@@ -73,6 +78,7 @@ const chart = await ChartSession.open({
 // chart.on("trade", logTrade);
 // chart.on("quote", logQuote);
 chart.on("bar", logBar);
+chart.on("latest_open", logLatestOpen);
 chart.on("latest_high_low", logLatestHighLow);
 chart.on("latest_close", logLatestClose);
 chart.on("status", (s) => {

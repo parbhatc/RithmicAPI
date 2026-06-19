@@ -21,6 +21,7 @@ const PACKETS = [
   { name: "LastTrade", id: 150 },
   { name: "BestBidOffer", id: 151 },
   { name: "HighPriceLowPrice", id: 152 },
+  { name: "OpeningPrice", id: 153 },
   { name: "ClosePrice", id: 155 },
   { name: "OrderBook", id: 156 },
   { name: "MarketMode", id: 157 },

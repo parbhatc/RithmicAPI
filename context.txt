@@ -1,0 +1,181 @@
+# RithmicAPI — Forming Candles / TradeSea Parity (experiment branch)
+
+Last updated: 2026-06-19
+
+## Goal
+
+Build **forming candles** (15m, 1h, 4h, 1D, 1W, 1m) via **direct Rithmic WebSocket** that **match TradeSea exactly** (±0.01 pt). TradeSea is the reference (Rithmic-backed). User wants:
+
+1. **TradeSea-accurate data** — 100% exact match on OHLC, no ticks off
+2. **Rithmic as production feed** — NOT using TradeSea MDS at runtime to serve data
+3. **TradeSea MDS only for verification/calibration** (compare script)
+4. TradingView free delayed WS was evaluated — **not suitable** for TradeSea parity (different vendor, session, contract, 10min delay)
+
+---
+
+## Verified Results
+
+Pure Rithmic (`bootstrapRithmicAccuracy` + `accuracy: 'tradesea'`) vs TradeSea MDS reference:
+
+- **Forming: 6/6** at ±0.01 pt (15m, 1h, 4h, 1D, 1W, 1m)
+- **Market: 3/3** (last, bid, ask)
+
+Verify command:
+```powershell
+node --env-file=.env examples/compare-tradesea-forming.mjs
+```
+
+Typical speed (varies with cache/network):
+- Rithmic connect: ~700–800 ms
+- Rithmic bootstrap (accuracy mode): ~5–50 s (first run slower; tick refine + session wait)
+- TradeSea ref fetch (verify only): ~400–700 ms
+
+---
+
+## Architecture
+
+### Core Rithmic path (production)
+| File | Purpose |
+|------|---------|
+| `lib/forming-bar-manager.js` | Bootstrap + live forming bars |
+| `lib/forming-strategy.js` | Minimal bootstrap plan (shared 1m + native 1D/1W/1M) |
+| `lib/forming-bar.js` | Chicago calendar buckets, Globex session open, OHLC aggregation |
+| `lib/forming-cache.js` | Replay cache (1m, native partial, weekly adjust TTL) |
+| `lib/rithmic-accuracy.js` | `bootstrapRithmicAccuracy()`, `attachRithmicAccuracy()`, accuracy bootstrap options |
+
+### TradeSea integration (verify / optional legacy overlay)
+| File | Purpose |
+|------|---------|
+| `lib/tradesea-mds-client.js` | Direct upstream WS (f:1 BBA, f:2 LTP, f:5 candles, f:6 quotes, f:7 TTV) |
+| `lib/tradesea-market-book.js` | Order book store |
+| `lib/tradesea-forming-sync.js` | `TradeseaMdsSync` — full MDS sync (legacy; user rejected for prod) |
+| `lib/tradesea-history.js` | UDF REST |
+| `lib/tradesea-verify.js` | `fetchTradeSeaReference()` read-only MDS snapshot for compare |
+| `lib/tradesea-week-adjust.js` | Weekly price offset (+302 pt for NQ typical) |
+| `lib/rithmic-tradesea-session.js` | Combined session convenience wrapper |
+
+### Examples
+| Script | Purpose |
+|--------|---------|
+| `examples/compare-tradesea-forming.mjs` | **Primary verify** — Rithmic-only vs TradeSea MDS |
+| `examples/test-forming-multi-tf.mjs` | Multi-TF bootstrap speed + OHLC check |
+| `examples/rithmic-tradesea-session.mjs` | Combined session demo |
+
+---
+
+## TradeSea Parity Rules (implemented in `accuracy: 'tradesea'`)
+
+1. **Session low bug fix**: session low uses `Math.min(bar.low, sessionLow)` not `Math.max`
+
+2. **1D / 1W forming**: TradeSea uses **Globex session OHLC** (templates 152/153 + last trade), NOT native Rithmic daily calendar bars. Implemented as `session-forming`.
+
+3. **4h high**: TradeSea uses **prior completed native 1h bar high** inside the 4h bucket, NOT whole-bucket 1m rollup max. Implemented as `4h-native-1h-high`.
+
+4. **Session overlay split**:
+   - **1D/1W**: session open + high + low
+   - **1h/4h**: session **low** cap only (not session open on 1h; not full-session high cap on 4h)
+   - **15m**: bucket rollup + tick refine only
+
+5. **Globex session**: `chicagoGlobexSessionOpen()` — 5 PM Chicago; 1m bootstrap extends back to session open for session stats
+
+6. **1-minute forming**: `refreshCurrent1m()` publishes `#partial1m` to forming key `"1"` (not monthly `"1M"`)
+
+7. **Weekly offset**: `TRADESEA_WEEKLY_ADJUST=302` env or auto-calibrate via TradeSea REST once
+
+---
+
+## Usage
+
+### Production (pure Rithmic)
+```javascript
+import { ChartSession, FormingBarManager, bootstrapRithmicAccuracy } from "./index.js";
+
+const chart = await ChartSession.open({ user, password, systemName: "LucidTrading", symbol: "NQ", exchange: "CME" });
+const mgr = new FormingBarManager(chart);
+
+await bootstrapRithmicAccuracy(mgr, {
+  resolutions: [15, 60, 240, "1D", "1W", 1],
+});
+// Live: session caps + 4h high refresh via attachRithmicAccuracy
+```
+
+Or via bootstrap option:
+```javascript
+await mgr.bootstrap({ resolutions: [...], accuracy: "tradesea" });
+```
+
+### Verify (TradeSea = reference only)
+```powershell
+node --env-file=.env examples/compare-tradesea-forming.mjs
+# Legacy TS MDS overlay (not recommended for prod):
+# RITHMIC_ONLY=0 node --env-file=.env examples/compare-tradesea-forming.mjs
+```
+
+---
+
+## Environment Variables
+
+```
+RITHMIC_USER / RITHMIC_PASSWORD
+TRADESEA_ACCESS_TOKEN          # verify + weekly calibrate only
+TRADESEA_CONNECTION_USER_ID    # defaults in code for LucidTrading
+TRADESEA_CONNECTION_GROUP_ID
+TRADESEA_WEEKLY_ADJUST=302     # optional, for 1W
+RITHMIC_ONLY=1                 # default in compare — pure Rithmic verify
+RITHMIC_ONLY=0                 # legacy TS MDS overlay mode
+COMPARE_TOL=0.01               # default tolerance in compare script
+RITHMIC_SYMBOL=NQ
+RITHMIC_EXCHANGE=CME
+```
+
+---
+
+## Compare Script Resolutions
+
+The 6 forming timeframes compared (note: last is **1-minute**, key `1`, not monthly `1M`):
+
+| Label | Rithmic resolution |
+|-------|-------------------|
+| 15 | 15 |
+| 60 | 60 |
+| 240 | 240 |
+| 1D | "1D" |
+| 1W | "1W" |
+| 1 | 1 (1-minute; TradeSea MDS key "1" or "1M" on WS) |
+
+---
+
+## Known Issues / Notes
+
+1. **Bootstrap speed**: accuracy mode ~5–50s depending on cache, tick refine, session template wait (152/153). LucidTrading may be slow on templates.
+
+2. **1m compare timing**: re-run compare if 1m drifts during long bootstrap; script calls `refreshCurrent1m()` before compare.
+
+3. **Market bid/ask**: can lag ~1 tick vs TradeSea ref during fast tape (forming still exact).
+
+4. **1D/1W marker display**: TradeSea ref may show different calendar marker (e.g. 6/22) vs Rithmic chart bucket (6/18); OHLC matches, markers differ.
+
+5. **Do NOT use TradeSea MDS as runtime data source** per user preference — only verify.
+
+6. **TradingView WS** (testrealstrat project): batch 1m CSV only; not suitable for live TradeSea parity (different session, continuous contract, delay).
+
+---
+
+## Related Project
+
+`C:\Users\parbh\OneDrive\Desktop\projects\testrealstrat` — uses TradingView WS for offline 1m CSV download; live charting uses Rithmic via RithmicHub. Compare tooling there is Rithmic vs TradeSea JSON, not TV.
+
+---
+
+## Git Branch
+
+This work lives on branch **`experiment`**. Push with:
+```powershell
+git push -u origin experiment
+```
+
+---
+
+## Key Commits Context
+
+Built on top of main branch forming candle / CandleLayer work. This experiment adds FormingBarManager, TradeSea verify path, and pure-Rithmic accuracy mode achieving 6/6 forming match.

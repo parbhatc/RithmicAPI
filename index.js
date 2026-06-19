@@ -13,6 +13,54 @@ export {
   fetchTickHistoryBars,
   fetchTickHistory,
 } from "./ChartSession.js";
+export { FormingBarManager } from "./lib/forming-bar-manager.js";
+export { FormingBootstrapCache } from "./lib/forming-cache.js";
+export { TradeseaMdsClient, MDS_BUCKET_LTP, MDS_BUCKET_BEST_BID_ASK, MDS_BUCKET_TTV } from "./lib/tradesea-mds-client.js";
+export { TradeseaMdsSync, TradeseaFormingSync } from "./lib/tradesea-forming-sync.js";
+export {
+  TradeseaMarketBookStore,
+  tradeseaBookToStatus,
+  resolveTradePanelBidAsk,
+  mergeBookSide,
+} from "./lib/tradesea-market-book.js";
+export {
+  fetchTradeseaHistory,
+  lastTradeseaBar,
+} from "./lib/tradesea-history.js";
+export {
+  toTradeseaResolution,
+  fromTradeseaResolution,
+  tradeseaBarUnix,
+  tradeseaResolutionKey,
+} from "./lib/tradesea-resolutions.js";
+export {
+  toTradeseaStreamSymbol,
+} from "./lib/tradesea-stream-symbol.js";
+export {
+  RithmicTradeSeaSession,
+  attachTradeSeaSync,
+} from "./lib/rithmic-tradesea-session.js";
+export {
+  bootstrapRithmicAccuracy,
+  attachRithmicAccuracy,
+  TRADESEA_ACCURACY_BOOTSTRAP,
+} from "./lib/rithmic-accuracy.js";
+export {
+  fetchTradeSeaReference,
+  compareFormingBar,
+  compareMarket,
+} from "./lib/tradesea-verify.js";
+export {
+  resolveTradeSeaWeeklyAdjust,
+  fetchTradeSeaClosedWeekClose,
+  shiftBarOHLC,
+  fetchTradeSeaLastBar,
+} from "./lib/tradesea-week-adjust.js";
+export {
+  planFormingBootstrap,
+  classifyFormingResolution,
+  NATIVE_PARTIAL_FROM_SEC,
+} from "./lib/forming-strategy.js";
 export {
   CandleLayer,
   ONE_MINUTE_PERIOD,
@@ -50,6 +98,14 @@ export {
 } from "./lib/history-query.js";
 export {
   bucketOpen,
+  chartBucketOpen,
+  chartBucketRithmicMarker,
+  calendarBarUnix,
+  chicagoMidnight,
+  chicagoWallClock,
+  isCalendarResolution,
+  yyyymmddChicago,
+  unixFromYyyymmddChicago,
   periodSecondsFromBarType,
   priorBarBefore,
   splitHistoryForForming,
