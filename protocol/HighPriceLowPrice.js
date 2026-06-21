@@ -1,7 +1,8 @@
 import { Packet } from "./Packet.js";
 
 export class HighPriceLowPrice extends Packet {
-  static MESSAGE_NAME = "HighPriceLowPrice";
+  /** Wire template 152; schema is `rti.TradeStatistics` in trade_statistics.proto. */
+  static MESSAGE_NAME = "TradeStatistics";
   static TEMPLATE_ID = 152;
 
   constructor() {
