@@ -4,7 +4,7 @@
  *
  * Run: npm run example:match-100t
  */
-import { fetchTickHistory } from "../index.js";
+import { HistoryFetch } from "../index.js";
 
 const user = process.env.RITHMIC_USER;
 const password = process.env.RITHMIC_PASSWORD;
@@ -20,7 +20,7 @@ const RESOLUTION = "100T";
 
 const countbackAnchor = process.env.COUNTBACK_ANCHOR ?? "to";
 
-const payload = await fetchTickHistory({
+const payload = await HistoryFetch.tickHistory({
   user,
   password,
   systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",

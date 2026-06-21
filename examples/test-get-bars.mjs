@@ -1,9 +1,9 @@
 /**
- * Raw history via ChartSession.loadHistory (compat payload) — no CandleLayer.
+ * Raw history via ChartSession.loadHistory (compat payload).
  *
  *   npm run example:test-bars
  *
- * For forming / tick-refined OHLC use: npm run example:forming-15m
+ * For higher-level chart examples use: npm run example:tv-15m
  *
  * Env: RITHMIC_TIME_RESOLUTION (default 15), RITHMIC_TIME_BAR_COUNT (default 25)
  */

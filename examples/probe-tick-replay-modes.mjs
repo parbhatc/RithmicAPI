@@ -3,7 +3,7 @@
  *
  *   node --env-file=.env examples/probe-tick-replay-modes.mjs
  */
-import { fetchTickHistory } from "../index.js";
+import { HistoryFetch } from "../index.js";
 
 const user = process.env.RITHMIC_USER;
 const password = process.env.RITHMIC_PASSWORD;
@@ -38,7 +38,7 @@ const base = {
 const modes = ["to", "from", "spread"];
 
 for (const countbackAnchor of modes) {
-  const payload = await fetchTickHistory({ ...base, countbackAnchor });
+  const payload = await HistoryFetch.tickHistory({ ...base, countbackAnchor });
   const n = payload.t.length;
   const dFirst = payload.t[0] - refFirstT;
   const dLast = payload.t.at(-1) - refLastT;

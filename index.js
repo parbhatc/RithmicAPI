@@ -6,62 +6,8 @@ export {
   buildOrderPlantHandshake,
   buildOrderPlantSideChannel,
 } from "./Session.js";
-export {
-  ChartSession,
-  fetchHistoryBars,
-  fetchHistory,
-  fetchTickHistoryBars,
-  fetchTickHistory,
-} from "./ChartSession.js";
-export {
-  CandleLayer,
-  ONE_MINUTE_PERIOD,
-  isCanonicalResolution,
-  isIsolatedResolution,
-  countback1mForResolutions,
-  countback1mTail,
-  periodSecondsFor,
-  resolutionKey,
-  deriveFormingFrom1m,
-  deriveClosedFrom1m,
-  aggregateFrom1m,
-  patch1mBarOpen,
-} from "./lib/candle-layer.js";
-export { ChartState } from "./lib/chart-state.js";
-export {
-  FormingReconstructKind,
-  isTickResolution,
-  resolveDataLayer,
-  resolveFormingReconstructStrategy,
-  aggregatePartialTickForming,
-  subBarsInBucket,
-  formingReplayWindowSeconds,
-  formingSubBarCountback,
-} from "./lib/forming-reconstruct.js";
-export {
-  parseResolution,
-  parseTickResolution,
-  resolveHistoryQuery,
-  resolveTickHistoryQuery,
-  barsToHistoryPayload,
-  aggregateTickBars,
-  trimCountbackBars,
-  subsampleCountbackBars,
-} from "./lib/history-query.js";
-export {
-  bucketOpen,
-  periodSecondsFromBarType,
-  priorBarBefore,
-  splitHistoryForForming,
-  aggregateReplayOHLC,
-  createFormingBar,
-  seedFormingBar,
-  applyTradeToFormingBar,
-  mergeBarIntoSeries,
-  isUsablePrice,
-  applyBucketOpen,
-  mergeFormingFromTimeBar,
-} from "./lib/forming-bar.js";
+export { ChartSession, HistoryFetch } from "./ChartSession.js";
+export { HistoryQuery } from "./lib/history-query.js";
 export {
   BarType,
   TimeBarType,

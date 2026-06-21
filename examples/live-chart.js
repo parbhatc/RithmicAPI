@@ -1,5 +1,5 @@
 /**
- * Live chart demo: history replay + last/bid/ask + forming bars.
+ * Live chart demo: history replay + last/bid/ask + closed bars.
  *
  * Env: RITHMIC_USER, RITHMIC_PASSWORD (+ optional RITHMIC_* in .env)
  */

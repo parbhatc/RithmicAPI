@@ -2,7 +2,7 @@
 
 Unofficial Node.js client for the [Rithmic](https://www.rithmic.com/) Protocol Buffer WebSocket API.
 
-Use it to discover gateways, load historical OHLC bars, and stream live quotes (last, bid/ask) and forming candles — similar to what charting apps show.
+Use it to discover gateways, load historical OHLC bars (time and tick), and stream live quotes and closed bars — similar to what charting apps show.
 
 Each message is a small class (`RequestFoo`, `LastTrade`, `TimeBar`, …) with `encode()` / `decode()`. The client adds the 4-byte length prefix.
 
@@ -51,17 +51,33 @@ Rithmic splits market data across **plants** (separate WebSocket logins on the s
 | **Ticker** | `1` | `LastTrade` (150), `BestBidOffer` (151), … via `RequestMarketDataUpdate` (100) |
 | **History** | `3` | `ResponseTimeBarReplay` (203), live `TimeBar` (250) via replay / `RequestTimeBarUpdate` (200) |
 
-`ChartSession` opens both connections, logs in, and gives you a simple API plus events.
+`ChartSession` opens both connections, logs in, and exposes history + live events.
+
+### Module layout
+
+Chart code is split into small classes under `lib/chart-session/`:
+
+| Class | Role |
+|-------|------|
+| `ChartSession` | Main session — connect, `loadHistory`, `loadTickHistory`, `startLive`, events |
+| `HistoryFetch` | One-shot fetch helpers (`bars`, `history`, `tickBars`, `tickHistory`) |
+| `HistoryQuery` | Resolution parsing, query building, `{ s, t, o, h, l, c, v }` payloads |
+| `SessionGateway` | Gateway discovery + dual-plant login |
+| `TimeBarHistory` | Time-bar replay (template 202 → 203) |
+| `TickBarHistory` | Tick-bar replay (template 206 → 207) |
+| `LiveFeed` | Live subscribe/unsubscribe + packet dispatch |
+
+Public exports from `index.js`: `ChartSession`, `HistoryFetch`, `HistoryQuery`, plus `Client`, protocol packets, and market helpers.
 
 ### Historical bars (one-shot)
 
 Query params match the usual chart-API shape: **`resolution`**, **`from`**, **`to`**, **`countback`**.
 
 ```js
-import { fetchHistoryBars, fetchHistory } from "rithmic-api";
+import { HistoryFetch, HistoryQuery } from "rithmic-api";
 
-// Same as: ?resolution=1&from=1779788481&to=1779929351&countback=300
-const bars = await fetchHistoryBars({
+// Normalized bar objects
+const bars = await HistoryFetch.bars({
   user: process.env.RITHMIC_USER,
   password: process.env.RITHMIC_PASSWORD,
   systemName: "LucidTrading",
@@ -73,8 +89,8 @@ const bars = await fetchHistoryBars({
   countback: 300,
 });
 
-// Compatibility arrays { s, t, o, h, l, c, v }
-const payload = await fetchHistory({
+// Chart arrays { s, t, o, h, l, c, v } (compat: true by default)
+const payload = await HistoryFetch.history({
   user: process.env.RITHMIC_USER,
   password: process.env.RITHMIC_PASSWORD,
   systemName: "LucidTrading",
@@ -85,8 +101,10 @@ const payload = await fetchHistory({
   to: 1779929351,
   countback: 300,
 });
-// fetchHistory defaults to compat: true.
-// For raw Rithmic mapping, pass compat: false.
+// Pass compat: false for direct 1:1 Rithmic bar mapping.
+
+// Or build payload from bars you already have:
+const manual = HistoryQuery.barsToHistoryPayload(bars, { compat: true });
 ```
 
 | Param | Maps to | Notes |
@@ -100,11 +118,30 @@ If **`from` and `to`** are both set, that window is sent to Rithmic (you may get
 
 Legacy names still work: `barCount`, `period`, `start_index`, `finish_index`.
 
-`marker` on each bar is the **bar open time** (Unix seconds, UTC). Some frontends use `t = marker - 60` for the same candle — pass `timeOffset: -60` with `payload: true` or `barsToHistoryPayload(bars, { timeOffset: -60 })`.
+`marker` on each bar is the **bar open time** (Unix seconds, UTC). Some frontends use `t = marker - 60` for the same candle — pass `timeOffset: -60` with `payload: true` or `HistoryQuery.barsToHistoryPayload(bars, { timeOffset: -60 })`.
 
-`fetchHistory()` now defaults to `compat: true`, which uses compatibility alignment (`t[i]` with OHLCV from the next bar, count `n - 1`). Use `compat: false` for a direct 1:1 Rithmic bar mapping.
+`HistoryFetch.history()` defaults to `compat: true`, which aligns `t[i]` with OHLCV from the next bar (count `n - 1`). Use `compat: false` for a direct 1:1 Rithmic mapping.
 
-### Live chart (last, bid/ask, forming bar)
+### Tick-bar history
+
+```js
+import { HistoryFetch } from "rithmic-api";
+
+const payload = await HistoryFetch.tickHistory({
+  user, password,
+  systemName: "LucidTrading",
+  symbol: "NQ",
+  exchange: "CME",
+  resolution: "100T",
+  from: 1780479674,
+  to: 1780510978,
+  countback: 301,
+});
+```
+
+`ChartSession.loadTickHistory()` uses the same options on an open session. See `examples/match-100t-chart.mjs`.
+
+### Live chart (last, bid/ask, closed bars)
 
 `ChartSession` uses **two WebSocket connections** on the same gateway:
 
@@ -139,12 +176,6 @@ chart.on("status", (s) => {
 // Default: 1-minute live bars; CHART preset = quote + session high/low + close/settlement
 await chart.startLive({ updateBits: MarketUpdatePreset.CHART });
 
-// 1-second live bars (matches web app SECOND_BAR + period 1)
-await chart.startLive({
-  barType: BarType.SECOND_BAR,
-  barPeriod: 1,
-});
-
 await chart.stopLive();
 chart.close();
 ```
@@ -155,9 +186,9 @@ chart.close();
 | `quote` | 151 `BestBidOffer` | Bid and/or ask updated (`BID` / `ASK` bits) |
 | `latest_high_low` | 152 `HighPriceLowPrice` | Session **high/low** snapshot |
 | `latest_close` | 155 `ClosePrice` | Session **close/settlement** snapshot |
-| `bar` | 250 `TimeBar` | **Closed** OHLC bar when a bucket finishes |
-| `formingBar` | — (built client-side) | Current **open** bucket from `LastTrade` + optional seed |
+| `bar` | 250 `TimeBar` | **Closed** OHLC bar from the history plant |
 | `status` | — | Merged snapshot after any tick/quote/bar update |
+| `message` | — | Other decoded packets (debug) |
 
 Normalized event fields:
 
@@ -183,74 +214,11 @@ Rithmic often sends **incomplete** ticks — only the fields flagged in `presenc
 
 Use `chart.status` for a single merged view (last + bid/ask + bar close).
 
-#### `CandleLayer` — chart refresh without lagging one candle
+#### Live `TimeBar`
 
-Use when you need **correct forming OHLC** on refresh (not only on live ticks). Rithmic’s **1m history replay** can report wrong highs/lows in the open bucket; the layer fixes that with a **tick replay** over the 1m tail before rolling up higher timeframes.
-
-**Minute+ flow** (`load1m({ alsoFor: [15] })`):
-
-```
-At 4:42 PM, viewing 15m:
-  1. Native 15m replay (include_forming: false) → completed bars through 4:15
-  2. 1m replay from 4:30 → now (~15 bars), not 300×1m
-  3. Tick replay over that 1m tail → correct OHLC per minute
-  4. Forming 15m = rollup of tick-refined 1m + forming 1m
-```
-
-| Resolution | Closed bars | Open bucket |
-|------------|-------------|-------------|
-| **15m, 60m, 1D, …** | Native Rithmic replay | Derived from 1m tail |
-| **1m** | Tick-refined replay (or full countback if `alsoFor` is only `1`) | `seedForming1m` / tick refine |
-
-**Defaults:** `loadHistory` and `load1m` use `include_forming: false` unless you opt in.
-
-```javascript
-import { ChartSession, CandleLayer, MarketUpdatePreset } from "rithmic-api";
-
-const chart = await ChartSession.open({ user, password, systemName: "LucidTrading", symbol: "NQ", exchange: "CME" });
-const layer = new CandleLayer(chart);
-
-await layer.load1m({
-  alsoFor: [15],           // native completed 15m + 1m tail for open bucket
-  countback: 25,             // native HTF bar count
-  include_forming: true,     // forming 15m + forming 1m
-  tickOpen: true,            // tick-refine 1m tail (default true)
-});
-
-const closed15 = layer.getClosed(15);   // rithmic-native, through last completed bucket
-const forming15 = layer.getForming(15); // 1m-derived+tick-bucket-open
-const series15 = layer.getSeries(15);   // closed + forming
-
-// Live: ticks → forming 1m only; re-read higher TF after each trade
-await chart.startLive({
-  updateBits: MarketUpdatePreset.QUOTE,
-  exactBar: layer.forming1m,
-  exactFormingBar: false,
-});
-chart.on("trade", (t) => {
-  layer.onTrade(t);
-  const bar = layer.getForming(15);
-});
-```
-
-`ChartState` is an alias for `CandleLayer`. **Seconds** (`5S` … `45S`) and **tick charts** (`100T`) use a separate path (`resolveDataLayer`) and do not use this 1m store.
-
-**Try it:**
-
-```bash
-npm run example:forming-15m
-RITHMIC_TIME_RESOLUTION=1 npm run example:forming-15m   # 1m only
-RITHMIC_INCLUDE_FORMING=0 npm run example:forming-15m # closed only
-RITHMIC_START_LIVE=1 npm run example:forming-15m      # live forming updates
-```
-
-See `examples/README.md` for all scripts.
-
-#### Live `TimeBar` vs forming candle
-
-- `TimeBar` (250) on **1m** closes the minute; higher TFs are not subscribed independently.
+- `TimeBar` (250) is subscribed on the **history plant** (default 1m).
 - `marker` = **bar open time** (Unix seconds, UTC).
-- For OHLC **close** while forming, use `LastTrade.price`; when the bucket closes, `TimeBar.close` matches the finalized bar.
+- For the current price while a bar is still open, use `LastTrade.price`; when the bar closes, `TimeBar.close` is the finalized value.
 
 Bid = buy side of the book. Ask = sell side. `Last … Buy/Sell` is the **aggressor** on that print, not a different close type.
 
@@ -261,8 +229,9 @@ npm run example              # discover gateways
 npm run example:bars         # time-bar replay (low-level)
 npm run example:chart        # history + live quotes/bars
 npm run example:test-bars    # loadHistory compat arrays
-npm run example:forming-15m  # CandleLayer forming OHLC (15m default, any minute TF)
+npm run example:tv-15m       # TradingView-style history query
 npm run example:tick-bars    # tick-bar replay
+npm run example:match-100t   # 100-tick chart comparison
 ```
 
 `examples/live-chart.js` prints readable lines like:
@@ -361,9 +330,12 @@ See `Session.js` and `examples/gateway-session.js` for details.
 | 151 | `BestBidOffer` |
 | 200 / 201 | Time bar subscribe / ack |
 | 202 / 203 | Time bar replay / bar or ack |
+| 206 / 207 | Tick bar replay |
 | 250 | `TimeBar` (live update) |
 
 Full list: `lib/templates.js`.
+
+Protobuf schemas load from `proto/*.proto` at `init()` time.
 
 Decode a captured frame:
 
@@ -373,26 +345,55 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 
 ## API reference
 
+### Core
+
 | Export | Description |
 |--------|-------------|
 | `init()` | Load `.proto` definitions once |
 | `connect(options?)` | WebSocket + `Client` |
 | `discover(systemName)` | Gateway URLs + system list |
-| `fetchHistoryBars(options)` | One-shot history (`resolution`, `from`, `to`, `countback`) → bars |
-| `fetchHistory(options)` | Same, returns `{ s, t, o, h, l, c, v }` |
-| `resolveHistoryQuery(options)` | Parse query params → Rithmic `start_index` / `finish_index` |
-| `barsToHistoryPayload(bars)` | Normalized bars → `{ s, t, o, h, l, c, v }` |
-| `ChartSession` | Dual-plant chart session (`open`, `loadHistory`, `startLive`, events) |
-| `ChartSession.open(options)` | Connect ticker + history |
-| `CandleLayer` | Canonical 1m store + native HTF completed + tick-refined forming rollup |
-| `CandleLayer.load1m`, `getClosed`, `getForming`, `getSeries`, `onTrade` | See forming-candle section above |
-| `ChartState` | Alias for `CandleLayer` |
-| `normalizeBar` / `normalizeTrade` / `normalizeQuote` | Packet → plain objects (respects `presence_bits`) |
-| `mergeTick` | Merge partial quote/trade updates |
-| `BarType`, `MarketUpdateBits`, `MarketUpdatePreset`, `LastTradePresence`, `BestBidOfferPresence`, … | Wire enums |
 | `Client` | `send`, `receive`, `exchange`, `drain`, `close` |
 | `Request*` / `Response*` / `LastTrade` / `TimeBar` / … | Packet classes |
 | `buildOrderPlantHandshake`, … | Order-plant login helpers |
+
+### Chart session
+
+| Export | Description |
+|--------|-------------|
+| `ChartSession` | Dual-plant chart session |
+| `ChartSession.open(options)` | Connect ticker + history plants |
+| `chart.loadHistory(options)` | Time-bar replay → normalized bars |
+| `chart.loadTickHistory(options)` | Tick-bar replay → normalized bars |
+| `chart.startLive(options)` | Subscribe live trade/quote/bar |
+| `chart.stopLive()` | Unsubscribe |
+| `chart.close()` | Close connections |
+| `chart.status` | Merged last/bid/ask/bar snapshot |
+
+### History helpers
+
+| Export | Description |
+|--------|-------------|
+| `HistoryFetch.bars(options)` | One-shot time-bar history → bar objects |
+| `HistoryFetch.history(options)` | Same, returns `{ s, t, o, h, l, c, v }` (`compat: true` default) |
+| `HistoryFetch.tickBars(options)` | One-shot tick-bar history → bar objects |
+| `HistoryFetch.tickHistory(options)` | Same, returns `{ s, t, o, h, l, c, v }` |
+| `HistoryQuery.parseResolution(resolution)` | `"15"` / `"1D"` → `{ barType, barTypePeriod, periodSeconds }` |
+| `HistoryQuery.parseTickResolution(resolution)` | `"100T"` → tick bar spec |
+| `HistoryQuery.resolveHistoryQuery(options)` | Query params → Rithmic `start_index` / `finish_index` |
+| `HistoryQuery.resolveTickHistoryQuery(options)` | Tick query params |
+| `HistoryQuery.barsToHistoryPayload(bars, opts)` | Bars → `{ s, t, o, h, l, c, v }` |
+| `HistoryQuery.trimCountbackBars(bars, n, anchor?)` | Trim to countback |
+| `HistoryQuery.aggregateTickBars(bars, tickSize)` | 1-tick → N-tick aggregation |
+| `HistoryQuery.isCalendarResolution(resolution)` | `D` / `W` / `M` resolutions |
+
+### Market views
+
+| Export | Description |
+|--------|-------------|
+| `normalizeBar` / `normalizeTickBar` / `normalizeTrade` / `normalizeQuote` | Packet → plain objects (respects `presence_bits`) |
+| `tickBarTime(bar)` | Fractional Unix time for tick bars |
+| `chartStatus(snapshot)` | Build merged status object |
+| `BarType`, `MarketUpdateBits`, `MarketUpdatePreset`, `ReplayDirection`, … | Wire enums |
 
 ### `Client` options
 
@@ -410,24 +411,29 @@ npm run decode -- AAAAEpi2SxLC6UAKMTc3OTkyNTMyNA==
 | `RITHMIC_SYSTEM` | e.g. `LucidTrading` |
 | `RITHMIC_SYMBOL` / `RITHMIC_EXCHANGE` | e.g. `NQ` / `CME` |
 | `RITHMIC_BAR_COUNT` | History length for `live-chart` / `time-bars-replay` |
-| `RITHMIC_TIME_RESOLUTION` | Chart TF for `example:forming-15m` (default `15`) |
-| `RITHMIC_TIME_BAR_COUNT` | Native HTF countback for `CandleLayer` (default `25`) |
-| `RITHMIC_INCLUDE_FORMING` | `0` = closed only; example defaults to forming on |
-| `RITHMIC_START_LIVE` | `1` = subscribe trades in `example:forming-15m` |
+| `RITHMIC_COUNTBACK` | Bar count for `example:tv-15m` (default `300`) |
+| `RITHMIC_TIME_RESOLUTION` | Resolution for `example:tv-15m` (default `15`) |
 | `RITHMIC_GATEWAY` | Optional gateway name filter |
 | `RITHMIC_VERBOSE` | Set to `1` in `live-chart` for merged `status` logs |
+| `RITHMIC_COMPARE_API` | Set to `1` in `example:tv-15m` to diff vs local API |
+| `RITHMIC_START_LIVE` | Set to `1` in `example:tv-15m` to stream live bars |
 
 ## Project layout
 
 ```
-index.js / ChartSession.js
+index.js
+ChartSession.js          re-exports lib/chart-session
 init.js / Session.js / Client.js
-lib/              templates, proto loader, market enums/views
-protocol/         Packet subclasses (generated + core)
-proto/            rithmic.proto, session.proto, async/*.proto
-examples/         handshake, live-chart, test-forming-15m (CandleLayer), … — see examples/README.md
-tools/            decode.js, generate-packets.mjs, download-protos.mjs
-extension/        Chrome sniffer (optional, gitignored in some setups)
+lib/
+  chart-session/         ChartSession, HistoryFetch, TimeBarHistory, TickBarHistory, LiveFeed, …
+  history-query.js       HistoryQuery
+  market-enums.js / market-views.js
+  proto.js               loads proto/*.proto
+protocol/                Packet subclasses (generated + core)
+proto/                   rithmic.proto, session.proto, async/*.proto
+examples/                see examples/README.md
+tools/                   decode.js, generate-packets.mjs, download-protos.mjs
+web/                     optional TradingView embed + datafeed server
 ```
 
 Regenerate packet classes after proto updates:

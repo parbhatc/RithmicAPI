@@ -7,7 +7,7 @@
  * If no file path is provided, set HISTORY_COMPARE_URL to fetch remote JSON.
  */
 import { readFile } from "node:fs/promises";
-import { fetchHistory } from "../index.js";
+import { HistoryFetch } from "../index.js";
 
 const params = {
   resolution: 1,
@@ -86,7 +86,7 @@ if (!user || !password) {
 
 const externalHistory = await loadExternalHistory(process.argv[2]);
 
-const rithmicMarker = await fetchHistory({
+const rithmicMarker = await HistoryFetch.history({
   user,
   password,
   systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
@@ -98,7 +98,7 @@ const rithmicMarker = await fetchHistory({
   timeOffset: 0,
 });
 
-const rithmicOffsetT = await fetchHistory({
+const rithmicOffsetT = await HistoryFetch.history({
   user,
   password,
   systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
