@@ -81,13 +81,13 @@ export class RithmicHub {
       const { barType, barTypePeriod } = HistoryQuery.parseResolution(rithmicRes);
 
       if (this.#liveActive) {
-        await this.#chart.stopLive();
+        await this.#chart.planets.live.stop();
         this.#liveActive = false;
       }
 
       this.#wireLiveHandlers();
 
-      await this.#chart.startLive({
+      await this.#chart.planets.live.start({
         updateBits: MarketUpdatePreset.CHART,
         barType,
         barPeriod: barTypePeriod,
@@ -300,7 +300,7 @@ export class RithmicHub {
 
     const job = (async () => {
       const t0 = performance.now();
-      let bars = await this.#chart.loadHistory({
+      let bars = await this.#chart.planets.history.load({
         resolution: rithmicRes,
         from: replayFrom,
         to: toSec,

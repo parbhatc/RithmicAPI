@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package rti;
+
+// Mobile / web client metadata (template 100002).
+message RequestMobileAppInfo {
+  int32 template_id = 154467;
+  string client_platform = 158100;
+  string app_name = 130002;
+  repeated string user_msg = 132760;
+}
+
+// Mobile app connect ack (template 100003)
+message ResponseMobileAppConnect {
+  int32 template_id = 154467;
+  string app_name = 130002;
+  string client_platform = 158100;
+  repeated string rq_handler_rp_code = 132764;
+  string app_version = 131804;
+  repeated string user_msg = 132760;
+}

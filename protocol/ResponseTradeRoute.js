@@ -3,7 +3,7 @@ import { TemplateId } from "../lib/templates.js";
 
 /** One simulator / trade-route row (APEX, RITHMIC, RITHMO, …). */
 export class ResponseTradeRoute extends Packet {
-  static MESSAGE_NAME = "ResponseTradeRoute";
+  static MESSAGE_NAME = "ResponseTradeRoutes";
   static TEMPLATE_ID = TemplateId.RESPONSE_TRADE_ROUTE;
 
   constructor() {

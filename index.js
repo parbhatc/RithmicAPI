@@ -1,13 +1,28 @@
-export { Client, MOBILE_URI } from "./Client.js";
-export { init, connect, discover } from "./init.js";
+export { Client, MOBILE_URI, init, connect, discover } from "./lib/core/index.js";
 export {
   buildLoginPress,
   buildLoginAccountWave,
   buildOrderPlantHandshake,
   buildOrderPlantSideChannel,
-} from "./Session.js";
-export { ChartSession, HistoryFetch } from "./ChartSession.js";
-export { HistoryQuery } from "./lib/history-query.js";
+} from "./lib/core/index.js";
+export {
+  ChartSession,
+  HistoryFetch,
+  HistoryPlanet,
+  TickerPlanet,
+  LivePlanet,
+  OrderPlanet,
+  PnLPlanet,
+  Planets,
+  DEFAULT_PLANTS,
+} from "./lib/sessions/chart/index.js";
+export { HistoryQuery } from "./lib/HistoryQuery.js";
+export {
+  PlantSession,
+  TickerSession,
+  OrderSession,
+  PnLSession,
+} from "./lib/sessions/plant/index.js";
 export {
   BarType,
   TimeBarType,
@@ -18,7 +33,7 @@ export {
   SubscribeRequest,
   MarketUpdateBits,
   MarketUpdatePreset,
-} from "./lib/market-enums.js";
+} from "./lib/marketEnums.js";
 export {
   normalizeBar,
   normalizeTickBar,
@@ -26,6 +41,6 @@ export {
   normalizeTrade,
   normalizeQuote,
   chartStatus,
-} from "./lib/market-views.js";
+} from "./lib/marketViews.js";
 export { TemplateId, UserType } from "./lib/templates.js";
 export * from "./protocol/index.js";

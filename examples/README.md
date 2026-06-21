@@ -1,34 +1,19 @@
 # Examples
 
-Copy `.env.example` to `.env` and set `RITHMIC_USER` / `RITHMIC_PASSWORD`.
+Requires `.env` with at least `RITHMIC_USER`, `RITHMIC_PASSWORD`. Optional: `RITHMIC_SYSTEM`, `RITHMIC_SYMBOL`, `RITHMIC_EXCHANGE`, `RITHMIC_GATEWAY`, `RITHMIC_COUNTBACK`, `RITHMIC_RESOLUTION`.
 
-| Script | npm command | What it does |
-|--------|-------------|--------------|
-| `handshake.js` | `npm run example` | Discover systems / gateways |
-| `gateway-session.js` | `npm run example:gateway` | Order-plant login burst |
-| `time-bars-replay.js` | `npm run example:bars` | Raw `RequestTimeBarReplay` |
-| `live-chart.js` | `npm run example:chart` | History + live quote/bar events |
-| `test-get-bars.mjs` | `npm run example:test-bars` | `loadHistory` compat payload |
-| `test-tv-history-15m.mjs` | `npm run example:tv-15m` | TradingView-style history (`from` / `to` / `countback`) |
-| `tick-bars-replay.mjs` | `npm run example:tick-bars` | Tick-bar history replay |
-| `match-100t-chart.mjs` | `npm run example:match-100t` | 100-tick chart comparison |
-| `compare-history.js` | — | `HistoryFetch.history` vs external JSON |
-| `probe-tick-replay-modes.mjs` | — | Compare tick replay `countbackAnchor` modes |
-
-## TradingView-style history (`test-tv-history-15m.mjs`)
-
-Uses `ChartSession.loadHistory` + `HistoryQuery.barsToHistoryPayload({ compat: true })`.
+Run with:
 
 ```bash
-npm run example:tv-15m
-RITHMIC_COMPARE_API=1 npm run example:tv-15m   # diff vs localhost:3000/api/rithmic/history
-RITHMIC_START_LIVE=1 npm run example:tv-15m    # stream closed bars
+node --env-file=.env examples/discover.mjs
 ```
 
-Env: `RITHMIC_COUNTBACK` (default `300`), `RITHMIC_TIME_RESOLUTION` (default `15`), `RITHMIC_FROM` / `RITHMIC_TO`.
-
-## Tick history
-
-`HistoryFetch.tickHistory()` / `ChartSession.loadTickHistory()` — see `match-100t-chart.mjs` and `tick-bars-replay.mjs`.
-
-Optional: `RITHMIC_SYMBOL`, `RITHMIC_EXCHANGE`, `RITHMIC_GATEWAY`.
+| Script | npm script | What it tests |
+|--------|------------|----------------|
+| `discover.mjs` | `npm run example:discover` | Gateway discovery |
+| `chartHistory.mjs` | `npm run example:history` | `ChartSession` + `planets.history.load` |
+| `chartLive.mjs` | `npm run example:live` | Live trade/quote/bar events |
+| `chartTickHistory.mjs` | `npm run example:tick` | Tick-bar replay |
+| `historyFetch.mjs` | `npm run example:fetch` | One-shot `HistoryFetch` |
+| `orderSession.mjs` | `npm run example:order` | Order plant accounts/routes |
+| `pnlSession.mjs` | `npm run example:pnl` | PnL snapshot |

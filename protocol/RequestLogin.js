@@ -7,6 +7,7 @@ export const InfraType = {
   ORDER_PLANT: 2,
   HISTORY_PLANT: 3,
   PNL_PLANT: 4,
+  REPOSITORY_PLANT: 5,
 };
 
 export class RequestLogin extends Packet {

@@ -7,28 +7,19 @@
   "exports": "./index.js",
   "files": [
     "index.js",
-    "init.js",
-    "Client.js",
     "lib",
     "protocol",
-    "proto",
-    "Session.js",
-    "ChartSession.js",
-    "tools"
+    "proto"
   ],
   "scripts": {
-    "example": "node --env-file=.env examples/handshake.js",
-    "example:gateway": "node --env-file=.env examples/gateway-session.js",
-    "example:bars": "node --env-file=.env examples/time-bars-replay.js",
-    "example:chart": "node --env-file=.env examples/live-chart.js",
-    "example:test-bars": "node --env-file=.env examples/test-get-bars.mjs",
-    "example:tv-15m": "node --env-file=.env examples/test-tv-history-15m.mjs",
-    "example:tick-bars": "node --env-file=.env examples/tick-bars-replay.mjs",
-    "example:match-100t": "node --env-file=.env examples/match-100t-chart.mjs",
-    "decode": "node tools/decode.js",
-    "protos:download": "node tools/download-protos.mjs",
-    "protos:packets": "node tools/generate-packets.mjs",
-    "test": "node examples/handshake.js"
+    "example:discover": "node --env-file=.env examples/discover.mjs",
+    "example:history": "node --env-file=.env examples/chartHistory.mjs",
+    "example:live": "node --env-file=.env examples/chartLive.mjs",
+    "example:tick": "node --env-file=.env examples/chartTickHistory.mjs",
+    "example:fetch": "node --env-file=.env examples/historyFetch.mjs",
+    "example:order": "node --env-file=.env examples/orderSession.mjs",
+    "example:pnl": "node --env-file=.env examples/pnlSession.mjs",
+    "test": "node --env-file=.env examples/discover.mjs"
   },
   "engines": {
     "node": ">=18"

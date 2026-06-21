@@ -1,17 +1,16 @@
 import { Packet } from "./Packet.js";
-import { TemplateId } from "../lib/templates.js";
+import { ResponseShowOrders } from "./ResponseShowOrders.js";
 
 export class RequestShowOrders extends Packet {
   static MESSAGE_NAME = "RequestShowOrders";
-  static TEMPLATE_ID = TemplateId.REQUEST_SHOW_ORDERS;
+  static TEMPLATE_ID = 320;
+  static Response = ResponseShowOrders;
 
-  constructor({ fcm_id, ib_id, account_id } = {}) {
+  constructor(data = {}) {
     super();
-    this.template_id = TemplateId.REQUEST_SHOW_ORDERS;
-    this.user_msg = [];
-    this.fcm_id = fcm_id;
-    this.ib_id = ib_id;
-    this.account_id = account_id;
+    this.template_id = 320;
+    this.user_msg = data.user_msg ?? [];
+    if (data) this.applyObject(data);
   }
 }
 

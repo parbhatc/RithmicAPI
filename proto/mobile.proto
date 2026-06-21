@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package rti;
 
-// Mobile / Lucid app messages not in async_rithmic public protos.
+// Mobile / Lucid app messages.
 
 message RequestSubscribeForUnderlying {
   enum Request {

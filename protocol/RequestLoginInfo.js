@@ -8,11 +8,15 @@ export class RequestLoginInfo extends Packet {
   static TEMPLATE_ID = TemplateId.REQUEST_LOGIN_INFO;
   static Response = ResponseLoginInfo;
 
-  /** @param {string} serverTag e.g. rproto_srvr_24_...@rithmic_46_domain:4928 */
-  constructor(serverTag) {
+  /** @param {string | { user_msg?: string[] }} serverTagOrOpts */
+  constructor(serverTagOrOpts) {
     super();
     this.template_id = TemplateId.REQUEST_LOGIN_INFO;
-    this.user_msg = [serverTag];
+    if (typeof serverTagOrOpts === "string") {
+      this.user_msg = [serverTagOrOpts];
+    } else {
+      this.user_msg = serverTagOrOpts?.user_msg ?? ["hello"];
+    }
   }
 }
 
