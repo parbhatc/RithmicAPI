@@ -9,4 +9,6 @@ extension/
 testing/
 *.mismatch.json
 *.compare.json
+*.compare.json
 history-compare*.json
+examples/logs/chartLive.txt

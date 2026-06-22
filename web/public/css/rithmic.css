@@ -1,5 +1,0 @@
-/* Rithmic web — news calendar not wired; hide toolbar + panel. */
-.tv-news-toolbar,
-.tv-news-panel {
-  display: none !important;
-}

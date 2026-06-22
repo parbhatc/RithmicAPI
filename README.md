@@ -223,7 +223,6 @@ lib/
 protocol/                packet classes
 proto/                   .proto message definitions
 examples/                runnable scripts (see examples/README.md)
-web/                     optional chart UI + datafeed server
 ```
 
 ## Examples

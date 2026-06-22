@@ -19,10 +19,7 @@
     "example:fetch": "node --env-file=.env examples/historyFetch.mjs",
     "example:order": "node --env-file=.env examples/orderSession.mjs",
     "example:pnl": "node --env-file=.env examples/pnlSession.mjs",
-    "test": "node --env-file=.env examples/discover.mjs",
-    "web": "node web/server/index.mjs",
-    "web:dev": "node --watch web/server/index.mjs",
-    "web:vendor": "node web/scripts/sync-chart-vendor.mjs"
+    "test": "node --env-file=.env examples/discover.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -36,8 +33,6 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "betterweightchart": "github:parbhatc/BetterweightChart#32263681587fe37637de2573b1918e2ce5e35939",
-    "lightweight-charts": "^5.0.3",
     "protobufjs": "^7.4.0",
     "ws": "^8.18.0"
   }
