@@ -44,10 +44,12 @@ export {
 } from "./lib/marketViews.js";
 export {
   FormingBarManager,
+  ChartLive,
   wrapChartSession,
   bootstrapRithmicAccuracy,
   fetchTradeseaHistory,
   lastTradeseaBar,
 } from "./lib/forming/index.js";
+export { fmtPrice, fmtWall, fmtBarTime, fmtOhlc, fmtOhlcChange } from "./lib/util/bar-format.js";
 export { TemplateId, UserType } from "./lib/templates.js";
 export * from "./protocol/index.js";
