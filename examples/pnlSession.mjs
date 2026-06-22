@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /** PnL plant: position snapshot. */
 import { init, PnLSession } from "../index.js";
-import { credentials } from "./env.mjs";
 
 await init();
 const pnl = await PnLSession.open({
-  ...credentials(),
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
 });
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /** Order plant: accounts + trade routes (login only, no order placed). */
 import { init, OrderSession } from "../index.js";
-import { credentials } from "./env.mjs";
 
 await init();
 const order = await OrderSession.open({
-  ...credentials(),
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
   mobileBootstrap: process.env.RITHMIC_MOBILE_ORDER === "1",
 });

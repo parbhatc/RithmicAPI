@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /** One-shot history without keeping a session open. */
 import { init, HistoryFetch } from "../index.js";
-import { credentials, symbolPair } from "./env.mjs";
 
 await init();
 const payload = await HistoryFetch.history({
-  ...credentials(),
-  ...symbolPair(),
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
+  symbol: "NQ",
+  exchange: "CME",
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
   resolution: process.env.RITHMIC_RESOLUTION ?? 1,
   countback: Number(process.env.RITHMIC_COUNTBACK ?? 50),

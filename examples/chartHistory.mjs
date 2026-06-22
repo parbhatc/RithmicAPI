@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /** Time-bar history via chart session (socket stays open for timeframe changes). */
 import { init, ChartSession } from "../index.js";
-import { credentials, symbolPair } from "./env.mjs";
 
 await init();
 const chart = await ChartSession.open({
-  ...credentials(),
-  ...symbolPair(),
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
+  symbol: "NQ",
+  exchange: "CME",
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
   plants: { ticker: true, history: true, order: false, pnl: false },
 });

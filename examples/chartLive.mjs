@@ -3,15 +3,19 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { init, ChartLive, fmtBarTime, fmtOhlc, fmtOhlcChange } from "../index.js";
-import { credentials, symbolPair } from "./env.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 await init();
 
 const live = await ChartLive.open({
-  ...credentials(),
-  ...symbolPair(),
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: process.env.RITHMIC_SYSTEM ?? "LucidTrading",
+  symbol: "NQ",
+  exchange: "CME",
+  resolution: 1,
+  forming: true,
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
   logDir: path.join(__dirname, "logs"),
 });

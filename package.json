@@ -19,6 +19,8 @@
     "example:fetch": "node --env-file=.env examples/historyFetch.mjs",
     "example:order": "node --env-file=.env examples/orderSession.mjs",
     "example:pnl": "node --env-file=.env examples/pnlSession.mjs",
+    "test:compare-1m": "node --env-file=.env testing/tradesea/compare-1m-history.mjs",
+    "test:compare-history": "node --env-file=.env testing/tradesea/compare-history.mjs",
     "test": "node --env-file=.env examples/discover.mjs"
   },
   "engines": {
