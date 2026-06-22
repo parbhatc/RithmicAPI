@@ -2,7 +2,10 @@ import {
   ChartSession,
   HistoryQuery,
   MarketUpdatePreset,
+  FormingBarManager,
+  wrapChartSession,
 } from "../../../../index.js";
+import { bootstrapRithmicAccuracy } from "../../../../lib/forming/rithmic-accuracy.js";
 import { calendarMarkerToUnix, unixToCalendarMarker } from "../../../../lib/marketViews.js";
 import { loadRithmicEnv } from "./env.mjs";
 import { toRithmicResolution } from "./resolutions.mjs";
@@ -41,6 +44,15 @@ export class RithmicHub {
   /** @type {Map<string, number>} last chart-time sent to stream clients */
   #lastSentChartTime = new Map();
   #onClosedBar = null;
+  /** @type {FormingBarManager | null} */
+  #formingManager = null;
+  /** @type {{ res: string, promise: Promise<unknown> } | null} */
+  #formingBootstrap = null;
+  #formingLiveAttached = false;
+
+  #usesForming(resolution) {
+    return this.#udfResolution(String(resolution)) === "1";
+  }
 
   #isSessionHealthy() {
     const history = this.#chart?.historyClient;
@@ -59,6 +71,10 @@ export class RithmicHub {
     this.#liveInflight = null;
     this.#liveResolution = null;
     this.#onClosedBar = null;
+    void this.#formingManager?.detachLive().catch(() => {});
+    this.#formingManager = null;
+    this.#formingBootstrap = null;
+    this.#formingLiveAttached = false;
     try {
       this.#chart?.close();
     } catch {
@@ -121,7 +137,7 @@ export class RithmicHub {
     }
   }
 
-  /** RequestTimeBarUpdate — closed TimeBar (250) only. */
+  /** Closed TimeBar (250) + 1m forming via FormingBarManager (experiment port). */
   async ensureLive(resolution = "1") {
     await this.ensureSession();
 
@@ -160,6 +176,14 @@ export class RithmicHub {
 
     this.#wireLiveHandlers();
 
+    if (this.#usesForming(udfRes)) {
+      try {
+        await this.#bootstrapForming(udfRes);
+      } catch (err) {
+        console.error("[rithmic] forming bootstrap failed:", err?.message ?? err);
+      }
+    }
+
     await this.#chart.planets.live.start({
       updateBits: MarketUpdatePreset.CHART,
       barType,
@@ -168,9 +192,104 @@ export class RithmicHub {
 
     this.#liveActive = true;
     this.#liveResolution = udfRes;
+
+    if (this.#usesForming(udfRes)) {
+      try {
+        await this.#attachFormingLive();
+      } catch (err) {
+        console.error("[rithmic] forming live attach failed:", err?.message ?? err);
+      }
+    }
+
     console.log(
-      `[rithmic] subscribed ${this.symbol} ${udfRes} live bars (closed only)`,
+      `[rithmic] subscribed ${this.symbol} ${udfRes} live` +
+        (this.#usesForming(udfRes) && this.#formingLiveAttached
+          ? " (closed + forming)"
+          : " (closed only)"),
     );
+  }
+
+  async #bootstrapForming(udfRes) {
+    if (!this.#chart) return;
+
+    if (!this.#formingManager) {
+      this.#formingManager = new FormingBarManager(wrapChartSession(this.#chart));
+      this.#formingManager.on("formingBar", ({ resolution, bar }) => {
+        if (resolution !== "1") return;
+        this.#emitForming("1", bar);
+      });
+    }
+
+    const stale =
+      !this.#formingBootstrap ||
+      this.#formingBootstrap.res !== udfRes;
+    if (stale) {
+      const useTradeSeaAccuracy = Boolean(process.env.TRADESEA_ACCESS_TOKEN);
+      this.#formingBootstrap = {
+        res: udfRes,
+        promise: useTradeSeaAccuracy
+          ? bootstrapRithmicAccuracy(this.#formingManager, {
+              resolutions: [1],
+              skipAttachLive: true,
+              skipAttachTrades: true,
+              timeoutMs: 120_000,
+            })
+          : this.#formingManager.bootstrap({
+              resolutions: [1],
+              fast: process.env.RITHMIC_FORMING_FAST !== "0",
+              useCache: true,
+            }),
+      };
+    }
+
+    try {
+      await this.#formingBootstrap.promise;
+    } catch (err) {
+      this.#formingBootstrap = null;
+      throw err;
+    }
+
+    this.#publishCurrentForming("1");
+  }
+
+  async #attachFormingLive() {
+    if (!this.#formingManager || this.#formingLiveAttached) return;
+    await this.#formingManager.attachLive({ skipStartLive: true });
+    this.#formingLiveAttached = true;
+    this.#publishCurrentForming("1");
+  }
+
+  #publishCurrentForming(resolution) {
+    const forming = this.#formingManager?.getForming(1);
+    if (forming) this.#emitForming(resolution, forming);
+  }
+
+  #refreshFormingAfterClose() {
+    if (!this.#formingManager || !this.#liveResolution) return;
+    if (!this.#usesForming(this.#liveResolution)) return;
+    const res = this.#liveResolution;
+    const useTradeSeaAccuracy = Boolean(process.env.TRADESEA_ACCESS_TOKEN);
+    this.#formingBootstrap = {
+      res,
+      promise: (async () => {
+        if (useTradeSeaAccuracy) {
+          await this.#formingManager.refreshCurrent1m(Math.floor(Date.now() / 1000));
+        } else {
+          await this.#formingManager.bootstrap({
+            resolutions: [1],
+            fast: true,
+            useCache: true,
+          });
+        }
+        this.#formingManager.syncFromLastTrade();
+      })(),
+    };
+    void this.#formingBootstrap.promise
+      .then(() => this.#publishCurrentForming(res))
+      .catch((err) => {
+        console.warn("[rithmic] forming refresh failed:", err?.message ?? err);
+        this.#formingBootstrap = null;
+      });
   }
 
   warmup() {
@@ -207,7 +326,10 @@ export class RithmicHub {
         }
       }
       if (!this.#liveResolution) return;
-      this.#emit(res, bar);
+      this.#emitClosed(res, bar);
+      if (this.#usesForming(res)) {
+        this.#refreshFormingAfterClose();
+      }
     };
 
     this.#chart.on("bar", this.#onClosedBar);
@@ -221,9 +343,8 @@ export class RithmicHub {
     return s;
   }
 
-  #sendChartBar(key, resolution, out, fn) {
+  #sendChartBar(key, resolution, out, fn, kind = "live") {
     const lastSent = this.#lastSentChartTime.get(key);
-    // BWC upserts by bar time — allow same-time OHLC updates (forming bar), block stale times.
     if (lastSent != null && out.time < lastSent) return false;
     const cached = this.#lastChartBar.get(key);
     if (
@@ -240,23 +361,57 @@ export class RithmicHub {
     }
     this.#lastSentChartTime.set(key, out.time);
     fn(out);
-    console.log(
-      `[rithmic] live ${resolution} → chart ${this.#fmtBarTime(out.time)} ET` +
-        ` O=${out.open} H=${out.high} L=${out.low} C=${out.close}`,
-    );
+    if (kind === "forming") {
+      console.log(
+        `[rithmic] live ${resolution} → chart forming ${this.#fmtBarTime(out.time)} ET` +
+          ` O=${out.open} H=${out.high} L=${out.low} C=${out.close}`,
+      );
+    } else {
+      console.log(
+        `[rithmic] live ${resolution} → chart ${kind} ${this.#fmtBarTime(out.time)} ET` +
+          ` O=${out.open} H=${out.high} L=${out.low} C=${out.close}`,
+      );
+    }
     return true;
   }
 
-  #emit(resolution, bar) {
-    const key = `${this.symbol}:${resolution}`;
+  #publishChartBar(key, resolution, out, kind = "live") {
     const set = this.#listeners.get(key);
-    if (!bar) return;
-    const out = this.#closedBarToChart(bar, resolution);
     this.#lastChartBar.set(key, out);
     if (!set?.size) return;
     for (const fn of set) {
-      this.#sendChartBar(key, resolution, out, fn);
+      this.#sendChartBar(key, resolution, out, fn, kind);
     }
+  }
+
+  #emitClosed(resolution, bar) {
+    if (!bar) return;
+    const key = `${this.symbol}:${resolution}`;
+    const out = this.#closedBarToChart(bar, resolution);
+    this.#publishChartBar(key, resolution, out, "closed");
+
+    if (this.#usesForming(resolution)) {
+      const marker = Number(bar.marker);
+      if (marker) {
+        const px = out.close;
+        this.#emitForming(resolution, {
+          marker,
+          open: px,
+          high: px,
+          low: px,
+          close: px,
+          volume: 0,
+          forming: true,
+        });
+      }
+    }
+  }
+
+  #emitForming(resolution, formingBar) {
+    if (!formingBar) return;
+    const key = `${this.symbol}:${resolution}`;
+    const out = this.#formingBarToChart(formingBar, resolution);
+    this.#publishChartBar(key, resolution, out, "forming");
   }
 
   get symbol() {
@@ -375,6 +530,19 @@ export class RithmicHub {
       return HistoryQuery.chartBarTimeSec(bar);
     }
     return Number(bar.marker) - resolutionSec(resolution);
+  }
+
+  /** Forming bar — marker is bucket open (chart compat time). */
+  #formingBarToChart(bar, resolution, tick = this.#minTick(this.symbol)) {
+    const ohlc = this.#normalizeOhlc(bar, tick);
+    return {
+      time: Number(bar.marker),
+      open: ohlc.open,
+      high: ohlc.high,
+      low: ohlc.low,
+      close: ohlc.close,
+      volume: bar.volume != null ? Number(bar.volume) : undefined,
+    };
   }
 
   /** Closed live TimeBar — compat label (open time) with this bar's OHLC. */
@@ -503,6 +671,17 @@ export class RithmicHub {
     }
   }
 
+  async ensureFormingReady(resolution = "1") {
+    if (!this.#usesForming(resolution)) return;
+    if (this.#formingBootstrap?.promise) {
+      try {
+        await this.#formingBootstrap.promise;
+      } catch {
+        /* bootstrap failed — history tail falls back to closed only */
+      }
+    }
+  }
+
   historyPayload({ bars, resolution = "1", mergeLive = true }) {
     const cal = HistoryQuery.isCalendarResolution(resolution);
     const udfRes = this.#udfResolution(resolution);
@@ -514,7 +693,13 @@ export class RithmicHub {
     });
 
     if (mergeLive && !cal) {
-      const live = this.#lastChartBar.get(key);
+      let live = this.#lastChartBar.get(key);
+      if (this.#usesForming(udfRes) && this.#formingManager) {
+        const forming = this.#formingManager.getForming(1);
+        if (forming) {
+          live = this.#formingBarToChart(forming, udfRes);
+        }
+      }
       const lastT = payload.t.at(-1);
       if (live?.time && lastT != null && live.time > lastT) {
         payload.t.push(live.time);
@@ -548,17 +733,25 @@ export class RithmicHub {
     if (!this.#listeners.has(key)) this.#listeners.set(key, new Set());
     this.#listeners.get(key).add(fn);
 
-    const cached = this.#lastChartBar.get(key);
-    const lastHist = this.#lastHistoryChartTime.get(key);
-    if (cached?.time && (lastHist == null || cached.time > lastHist)) {
-      queueMicrotask(() => {
-        try {
-          this.#sendChartBar(key, udfRes, cached, fn);
-        } catch {
-          /* client disconnected */
+    queueMicrotask(() => {
+      try {
+        let out = null;
+        if (this.#usesForming(udfRes) && this.#formingManager) {
+          const forming = this.#formingManager.getForming(1);
+          if (forming) out = this.#formingBarToChart(forming, udfRes);
         }
-      });
-    }
+        if (!out) {
+          const cached = this.#lastChartBar.get(key);
+          const lastHist = this.#lastHistoryChartTime.get(key);
+          if (cached?.time && (lastHist == null || cached.time > lastHist)) {
+            out = cached;
+          }
+        }
+        if (out) this.#sendChartBar(key, udfRes, out, fn, out === this.#lastChartBar.get(key) ? "live" : "forming");
+      } catch {
+        /* client disconnected */
+      }
+    });
 
     void this.ensureLive(udfRes).catch((err) => {
       console.error(`[rithmic] live ${udfRes} failed:`, err?.message ?? err);

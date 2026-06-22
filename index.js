@@ -42,5 +42,12 @@ export {
   normalizeQuote,
   chartStatus,
 } from "./lib/marketViews.js";
+export {
+  FormingBarManager,
+  wrapChartSession,
+  bootstrapRithmicAccuracy,
+  fetchTradeseaHistory,
+  lastTradeseaBar,
+} from "./lib/forming/index.js";
 export { TemplateId, UserType } from "./lib/templates.js";
 export * from "./protocol/index.js";

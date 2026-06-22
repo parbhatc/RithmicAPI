@@ -62,6 +62,10 @@ export async function rithmicHistory({ symbol, resolution, from, to, countback }
       countback: countback != null ? Number(countback) : 300,
     });
 
+    if (isRecentTail) {
+      await rithmicHub.ensureFormingReady(res);
+    }
+
     if (!bars?.length) return { s: "no_data", meta: { source: "rithmic", resolution, symbol } };
 
     const payload = rithmicHub.historyPayload({ bars, resolution: res, mergeLive: isRecentTail });
