@@ -14,13 +14,17 @@ import {
 import { ONE_MINUTE_PERIOD } from "../lib/forming/candle-layer.js";
 import { bucketOpen } from "../lib/forming/forming-bar.js";
 import { credentials, symbolPair } from "./env.mjs";
+import { WireSnifferLog } from "../lib/util/wire-sniffer-log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = path.join(__dirname, "logs", "chartLive.txt");
+const WS_LOG_PATH = path.join(__dirname, "logs", "chartLive-ws.txt");
 
 const runSec = Number(process.env.RITHMIC_LIVE_SECONDS ?? 0);
 const STALE_MS = Number(process.env.RITHMIC_STALE_MS ?? 45_000);
 const WATCH_MS = Number(process.env.RITHMIC_WATCH_MS ?? 10_000);
+const WIRE_VERBOSE = process.env.RITHMIC_WIRE_VERBOSE === "1";
+const WIRE_MARKET = process.env.RITHMIC_WIRE_MARKET === "1";
 const { symbol } = symbolPair();
 const useCompat = Boolean(process.env.TRADESEA_ACCESS_TOKEN);
 
@@ -54,15 +58,57 @@ const fmtChg = (open, close) => {
 
 const fmtOhlcLive = (bar) => `${fmtOhlc(bar)}${fmtChg(bar.open, bar.close)}`;
 
-const fmtTradeTime = (t) => {
-  const ssboe = Number(t?.ssboe);
-  return Number.isFinite(ssboe) && ssboe > 0 ? fmtTime(ssboe) : fmtWall();
-};
 
 const WS_STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+const SESSION_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+
+let sessionKickCount = 0;
+let sessionBackoffUntil = 0;
+let lastKickAt = 0;
+
+function isSessionLimitError(code, reason, errMsg = "") {
+  if (code === 1011) return true;
+  const text = `${reason ?? ""} ${errMsg}`;
+  return /permission denied|\b13\b|forced.?logout/i.test(text);
+}
+
+function sessionBackoffMs() {
+  const idx = Math.min(Math.max(sessionKickCount - 1, 0), SESSION_BACKOFF_MS.length - 1);
+  return SESSION_BACKOFF_MS[idx];
+}
+
+function noteSessionKick(source) {
+  const now = Date.now();
+  if (now - lastKickAt < 3000) return;
+  lastKickAt = now;
+  sessionKickCount += 1;
+  const backoff = sessionBackoffMs();
+  sessionBackoffUntil = Date.now() + backoff;
+  const line =
+    `Session limit (${source}) — Rithmic forced logout (account allows 1 plant session). ` +
+    `Check for another node/chartLive process or Rithmic browser tab; wait ${backoff / 1000}s before retry.`;
+  term(`${line} @ ${fmtWall()}`);
+  logDetail(line);
+}
+
+function inSessionBackoff() {
+  return Date.now() < sessionBackoffUntil;
+}
+
+function resetSessionKickIfStable() {
+  if (sessionKickCount === 0) return;
+  sessionKickCount = 0;
+  sessionBackoffUntil = 0;
+}
 
 fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
 const logStream = fs.createWriteStream(LOG_PATH, { flags: "w" });
+const wsLogStream = fs.createWriteStream(WS_LOG_PATH, { flags: "w" });
+const wireSniffer = new WireSnifferLog(wsLogStream, {
+  verbose: WIRE_VERBOSE,
+  verboseMarket: WIRE_MARKET,
+});
+wireSniffer.header({ app: "chartLive" });
 
 function logFile(line) {
   logStream.write(`${line}\n`);
@@ -143,10 +189,19 @@ function wireWsClient(chart, name, client) {
   }
   ws.on("close", (code, reason) => {
     const r = reason?.toString?.() || "";
+    ws.__chartLiveWired = false;
+    if (client._intentionalClose || shuttingDown) {
+      logDetail(`WS closed (${name}) code=${code} intentional`);
+      return;
+    }
     const line = `WS disconnected (${name}): code=${code}${r ? ` ${r}` : ""}`;
     term(`${line} @ ${fmtWall()}`);
     logDetail(line);
-    ws.__chartLiveWired = false;
+    if (isSessionLimitError(code, r)) {
+      noteSessionKick(`1011:${name}`);
+      scheduleEnsureLive(chart, { delayMs: sessionBackoffMs(), reason: "session-limit" });
+      return;
+    }
     scheduleEnsureLive(chart, { delayMs: 1500, reason: `ws-close:${name}` });
   });
   ws.on("error", (err) => {
@@ -196,8 +251,10 @@ async function waitPlantsOpen(chart, maxMs = 20_000) {
 
 let ensureLiveChain = Promise.resolve();
 let lastLiveStallAt = 0;
+let shuttingDown = false;
 
 function scheduleEnsureLive(chart, { delayMs = 0, reason = "" } = {}) {
+  if (shuttingDown) return ensureLiveChain;
   ensureLiveChain = ensureLiveChain
     .then(async () => {
       if (delayMs > 0) {
@@ -214,9 +271,16 @@ function scheduleEnsureLive(chart, { delayMs = 0, reason = "" } = {}) {
 }
 
 async function ensureLive(chart, reason = "") {
+  if (shuttingDown) return;
+  if (inSessionBackoff()) {
+    logDetail(
+      `ensureLive skipped — session backoff until ${fmtWall(sessionBackoffUntil)}${reason ? ` (${reason})` : ""}`,
+    );
+    return;
+  }
+
   const feed = chart.liveFeed;
   if (feed?.live && feed.pumps?.length >= 2 && plantsOpen(chart)) {
-    resumeHistoryPump(chart);
     return;
   }
 
@@ -232,6 +296,9 @@ async function ensureLive(chart, reason = "") {
       } catch (err) {
         const line = `reconnect failed: ${err?.message ?? err}`;
         logDetail(line);
+        if (isSessionLimitError(null, "", line)) {
+          noteSessionKick("reconnect");
+        }
       }
     }
     if (!plantsOpen(chart)) {
@@ -252,36 +319,64 @@ async function ensureLive(chart, reason = "") {
   try {
     await chart.planets.live.start({ updateBits: MarketUpdatePreset.CHART });
     logDetail(`live feed (re)started${reason ? ` (${reason})` : ""}`);
+    resetSessionKickIfStable();
   } catch (err) {
     const line = `ensureLive failed: ${err?.message ?? err}`;
     term(`${line} @ ${fmtWall()}`);
     logDetail(line);
+    if (isSessionLimitError(null, "", line)) {
+      noteSessionKick("ensureLive");
+    }
   }
 }
 
+async function runBootstrap(chart, mgr) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      logDetail("bootstrap 1m start");
+      if (useCompat) {
+        logDetail("bootstrap rithmic accuracy (compat, TradeSea open/close)");
+        await bootstrapRithmicAccuracy(mgr, {
+          resolutions: [1],
+          skipAttachLive: true,
+          prefetchQuote: false,
+        });
+      } else {
+        logDetail("bootstrap 1m shared");
+        await mgr.bootstrap({ resolutions: [1] });
+      }
+      return;
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      const recoverable = /not connected|permission denied|\b1011\b/.test(msg);
+      if (!recoverable || attempt === maxAttempts) throw err;
+      logDetail(`bootstrap failed (${msg}) — reconnect ${attempt + 1}/${maxAttempts}`);
+      await chart.reconnectDataPlants();
+      wireWsStatus(chart);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+}
+
+let chart;
+let mgr;
+let watch;
+
+try {
 await init();
-const chart = await ChartSession.open({
+chart = await ChartSession.open({
   ...credentials(),
   ...symbolPair(),
   gatewayName: process.env.RITHMIC_GATEWAY ?? "Chicago",
   plants: { ticker: true, history: true, order: false, pnl: false },
+  wireSniffer,
 });
 wireWsStatus(chart);
 
-const mgr = new FormingBarManager(wrapChartSession(chart));
+mgr = new FormingBarManager(wrapChartSession(chart));
 
-logDetail("bootstrap 1m start");
-if (useCompat) {
-  logDetail("bootstrap rithmic accuracy (compat, TradeSea open/close)");
-  await bootstrapRithmicAccuracy(mgr, {
-    resolutions: [1],
-    skipAttachLive: true,
-    prefetchQuote: false,
-  });
-} else {
-  logDetail("bootstrap 1m shared");
-  await mgr.bootstrap({ resolutions: [1] });
-}
+await runBootstrap(chart, mgr);
 const forming0 = mgr.getForming(1);
 logDetail(
   `bootstrap done closed=${mgr.closed1m?.length ?? 0} forming=${forming0 ? fmtTime(forming0.marker) : "none"}`,
@@ -291,7 +386,11 @@ const header = `Symbol: ${symbol}  Timeframe: 1 min  Compat: ${useCompat ? "Enab
 term(header);
 logDetail(header);
 term(`Logging to ${path.relative(process.cwd(), LOG_PATH)}`);
+term(`Wire log (compare with browser sniffer): ${path.relative(process.cwd(), WS_LOG_PATH)}`);
 logFile(`=== session ${new Date().toISOString()} ${symbol} ===`);
+logDetail(
+  `wire log → ${path.relative(process.cwd(), WS_LOG_PATH)} verbose=${WIRE_VERBOSE} market=${WIRE_MARKET}`,
+);
 
 termLatest(mgr.closed1m?.at(-1));
 
@@ -362,8 +461,6 @@ mgr.on("formingBar", ({ bar }) => {
 
 chart.on("trade", (t) => {
   touchActivity(state);
-  const size = t.size ?? t.volume ?? t.qty ?? 1;
-  logFile(`[${fmtTradeTime(t)}] trade ${fmt(t.price)} ${size}`);
 });
 
 chart.on("quote", () => {
@@ -380,13 +477,21 @@ chart.on("bar", (tb) => {
 });
 
 chart.on("liveStall", ({ plant, readyState }) => {
+  if (shuttingDown) return;
   const now = Date.now();
   if (now - lastLiveStallAt < 2000) return;
   lastLiveStallAt = now;
   const line = `Live pump stopped (${plant}) ws=${WS_STATES[readyState] ?? readyState}`;
   term(`${line} @ ${fmtWall()}`);
   logDetail(line);
-  scheduleEnsureLive(chart, { delayMs: 500, reason: `stall:${plant}` });
+  const delay = inSessionBackoff() ? sessionBackoffMs() : 500;
+  scheduleEnsureLive(chart, { delayMs: delay, reason: `stall:${plant}` });
+});
+
+chart.on("sessionKicked", ({ plant }) => {
+  if (shuttingDown) return;
+  noteSessionKick(`forced-logout:${plant}`);
+  scheduleEnsureLive(chart, { delayMs: sessionBackoffMs(), reason: "forced-logout" });
 });
 
 chart.on("liveReceiveError", ({ plant, error }) => {
@@ -404,23 +509,20 @@ await mgr.attachLive({ skipStartLive: true });
 mgr.syncFromLastTrade();
 emitLive(mgr.getForming(1));
 
-const watch = setInterval(() => {
+watch = setInterval(() => {
   const now = Date.now();
   const staleSec = (now - state.lastPacketAt) / 1000;
   const ticker = wsLabel(chart.tickerClient?.ws);
   const history = wsLabel(chart.historyClient?.ws);
   const pumpActive = chart.liveFeed?.live;
 
-  if (chart.liveFeed?.historyPumpPaused) {
-    resumeHistoryPump(chart);
-    logDetail("history pump force-resumed");
-  }
-
   if (ticker !== "OPEN" || history !== "OPEN" || !pumpActive) {
     const line = `WS status: ticker=${ticker} history=${history} livePump=${pumpActive ? "on" : "off"}`;
     term(`${line} @ ${fmtWall()}`);
     logDetail(line);
-    scheduleEnsureLive(chart, { reason: "watch" });
+    if (!inSessionBackoff()) {
+      scheduleEnsureLive(chart, { reason: "watch" });
+    }
   }
 
   if (staleSec * 1000 >= STALE_MS && now - lastStaleLogAt >= STALE_MS) {
@@ -461,13 +563,36 @@ logDetail(runMsg);
 
 await new Promise((resolve) => {
   if (runSec > 0) setTimeout(resolve, runSec * 1000);
-  process.once("SIGINT", resolve);
+  process.once("SIGINT", () => {
+    shuttingDown = true;
+    resolve();
+  });
 });
+} finally {
+shuttingDown = true;
+if (watch) clearInterval(watch);
+await ensureLiveChain.catch(() => {});
+logDetail("shutdown: stopping live feed and logging out plants…");
+try {
+  await chart?.planets?.live?.stop();
+} catch {
+  /* ignore */
+}
+try {
+  await mgr?.detachLive();
+} catch {
+  /* ignore */
+}
+if (chart) {
+  await chart.close();
+  logDetail("shutdown: all plants logged out");
+}
+}
 
-clearInterval(watch);
-await chart.planets.live.stop();
-await mgr.detachLive();
-chart.close();
-
-await new Promise((resolve) => logStream.end(resolve));
+await new Promise((resolve) => {
+  logStream.end(() => {
+    wsLogStream.end(resolve);
+  });
+});
 term(`Stopped. Full log: ${path.relative(process.cwd(), LOG_PATH)}`);
+term(`Wire log: ${path.relative(process.cwd(), WS_LOG_PATH)}`);
