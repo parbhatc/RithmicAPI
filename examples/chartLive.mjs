@@ -42,6 +42,23 @@ const fmtTime = (sec) => new Date(Number(sec) * 1000).toLocaleString("en-US", ti
 const fmtOhlc = (bar) =>
   `O=${fmt(bar.open)} H=${fmt(bar.high)} L=${fmt(bar.low)} C=${fmt(bar.close)}`;
 
+const fmtChg = (open, close) => {
+  const o = Number(open);
+  const c = Number(close);
+  if (!Number.isFinite(o) || !Number.isFinite(c)) return "";
+  const pts = c - o;
+  const pct = o !== 0 ? (pts / o) * 100 : 0;
+  const sign = pts >= 0 ? "+" : "";
+  return ` ${sign}${pts.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
+};
+
+const fmtOhlcLive = (bar) => `${fmtOhlc(bar)}${fmtChg(bar.open, bar.close)}`;
+
+const fmtTradeTime = (t) => {
+  const ssboe = Number(t?.ssboe);
+  return Number.isFinite(ssboe) && ssboe > 0 ? fmtTime(ssboe) : fmtWall();
+};
+
 const WS_STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
 
 fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
@@ -93,8 +110,8 @@ function termLatest(bar) {
 
 function termLive(bar) {
   if (!bar) return;
-  term(`Live: @ ${fmtTime(bar.marker)} ${fmtOhlc(bar)}`);
-  logDetail(`Live @ ${fmtTime(bar.marker)} ${fmtOhlc(bar)}`);
+  term(`Live: @ ${fmtTime(bar.marker)} ${fmtOhlcLive(bar)}`);
+  logDetail(`Live @ ${fmtTime(bar.marker)} ${fmtOhlcLive(bar)}`);
 }
 
 function termNewBar(bar) {
@@ -110,27 +127,38 @@ function termClosed(source, bar, chartOpenSec) {
   logDetail(`Closed (${source}) @ ${fmtTime(t)} ${fmtOhlc(bar)}`);
 }
 
-function wireWsStatus(chart) {
-  for (const name of ["ticker", "history"]) {
-    const client = name === "ticker" ? chart.tickerClient : chart.historyClient;
-    const ws = client?.ws;
-    if (!ws) continue;
-    const msg = `WS connected (${name}): ${chart.uri}`;
+function wireWsClient(chart, name, client) {
+  const ws = client?.ws;
+  if (!ws || ws.__chartLiveWired) return;
+  ws.__chartLiveWired = true;
+  const msg = `WS connected (${name}): ${chart.uri}`;
+  if (ws.readyState === 1) {
     term(msg);
     logDetail(msg);
-    ws.on("close", (code, reason) => {
-      const r = reason?.toString?.() || "";
-      const line = `WS disconnected (${name}): code=${code}${r ? ` ${r}` : ""}`;
-      term(`${line} @ ${fmtWall()}`);
-      logDetail(line);
-      setTimeout(() => void ensureLive(chart), 1500);
-    });
-    ws.on("error", (err) => {
-      const line = `WS error (${name}): ${err?.message ?? err}`;
-      term(`${line} @ ${fmtWall()}`);
-      logDetail(line);
+  } else {
+    ws.once("open", () => {
+      term(msg);
+      logDetail(msg);
     });
   }
+  ws.on("close", (code, reason) => {
+    const r = reason?.toString?.() || "";
+    const line = `WS disconnected (${name}): code=${code}${r ? ` ${r}` : ""}`;
+    term(`${line} @ ${fmtWall()}`);
+    logDetail(line);
+    ws.__chartLiveWired = false;
+    scheduleEnsureLive(chart, { delayMs: 1500, reason: `ws-close:${name}` });
+  });
+  ws.on("error", (err) => {
+    const line = `WS error (${name}): ${err?.message ?? err}`;
+    term(`${line} @ ${fmtWall()}`);
+    logDetail(line);
+  });
+}
+
+function wireWsStatus(chart) {
+  wireWsClient(chart, "ticker", chart.tickerClient);
+  wireWsClient(chart, "history", chart.historyClient);
 }
 
 function touchActivity(state) {
@@ -145,21 +173,90 @@ function resumeHistoryPump(chart) {
   chart.liveFeed?.resumeHistoryPump();
 }
 
-async function ensureLive(chart) {
+function plantsOpen(chart) {
+  return (
+    chart.tickerClient?.ws?.readyState === 1 &&
+    chart.historyClient?.ws?.readyState === 1
+  );
+}
+
+function plantNeedsReconnect(client) {
+  const rs = client?.ws?.readyState;
+  return rs == null || rs === 2 || rs === 3;
+}
+
+async function waitPlantsOpen(chart, maxMs = 20_000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (plantsOpen(chart)) return true;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
+}
+
+let ensureLiveChain = Promise.resolve();
+let lastLiveStallAt = 0;
+
+function scheduleEnsureLive(chart, { delayMs = 0, reason = "" } = {}) {
+  ensureLiveChain = ensureLiveChain
+    .then(async () => {
+      if (delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+      await ensureLive(chart, reason);
+    })
+    .catch((err) => {
+      const line = `ensureLive chain failed: ${err?.message ?? err}`;
+      term(`${line} @ ${fmtWall()}`);
+      logDetail(line);
+    });
+  return ensureLiveChain;
+}
+
+async function ensureLive(chart, reason = "") {
   const feed = chart.liveFeed;
-  const tickerOk = chart.tickerClient?.ws?.readyState === 1;
-  const historyOk = chart.historyClient?.ws?.readyState === 1;
-  if (feed?.live && feed.pumps?.length >= 2 && tickerOk && historyOk) {
+  if (feed?.live && feed.pumps?.length >= 2 && plantsOpen(chart)) {
     resumeHistoryPump(chart);
     return;
   }
+
+  if (!plantsOpen(chart)) {
+    const needsReconnect =
+      plantNeedsReconnect(chart.tickerClient) ||
+      plantNeedsReconnect(chart.historyClient);
+    if (needsReconnect) {
+      try {
+        logDetail(`reconnecting plants${reason ? ` (${reason})` : ""}`);
+        await chart.reconnectDataPlants();
+        wireWsStatus(chart);
+      } catch (err) {
+        const line = `reconnect failed: ${err?.message ?? err}`;
+        logDetail(line);
+      }
+    }
+    if (!plantsOpen(chart)) {
+      const ready = await waitPlantsOpen(chart, 10_000);
+      if (!ready) {
+        logDetail(`ensureLive skipped — WS timeout${reason ? ` (${reason})` : ""}`);
+        return;
+      }
+    }
+  }
+
   try {
     if (feed?.live) await chart.planets.live.stop();
   } catch {
     /* ignore */
   }
-  await chart.planets.live.start({ updateBits: MarketUpdatePreset.CHART });
-  logDetail("live feed (re)started");
+
+  try {
+    await chart.planets.live.start({ updateBits: MarketUpdatePreset.CHART });
+    logDetail(`live feed (re)started${reason ? ` (${reason})` : ""}`);
+  } catch (err) {
+    const line = `ensureLive failed: ${err?.message ?? err}`;
+    term(`${line} @ ${fmtWall()}`);
+    logDetail(line);
+  }
 }
 
 await init();
@@ -266,12 +363,11 @@ mgr.on("formingBar", ({ bar }) => {
 chart.on("trade", (t) => {
   touchActivity(state);
   const size = t.size ?? t.volume ?? t.qty ?? 1;
-  logDetail(`trade ${fmt(t.price)} ${size}`);
+  logFile(`[${fmtTradeTime(t)}] trade ${fmt(t.price)} ${size}`);
 });
 
-chart.on("quote", (q) => {
+chart.on("quote", () => {
   touchActivity(state);
-  logDetail(`quote ${fmt(q.bid)} ${fmt(q.ask)}`);
 });
 
 chart.on("bar", (tb) => {
@@ -284,10 +380,13 @@ chart.on("bar", (tb) => {
 });
 
 chart.on("liveStall", ({ plant, readyState }) => {
+  const now = Date.now();
+  if (now - lastLiveStallAt < 2000) return;
+  lastLiveStallAt = now;
   const line = `Live pump stopped (${plant}) ws=${WS_STATES[readyState] ?? readyState}`;
   term(`${line} @ ${fmtWall()}`);
   logDetail(line);
-  void ensureLive(chart);
+  scheduleEnsureLive(chart, { delayMs: 500, reason: `stall:${plant}` });
 });
 
 chart.on("liveReceiveError", ({ plant, error }) => {
@@ -321,6 +420,7 @@ const watch = setInterval(() => {
     const line = `WS status: ticker=${ticker} history=${history} livePump=${pumpActive ? "on" : "off"}`;
     term(`${line} @ ${fmtWall()}`);
     logDetail(line);
+    scheduleEnsureLive(chart, { reason: "watch" });
   }
 
   if (staleSec * 1000 >= STALE_MS && now - lastStaleLogAt >= STALE_MS) {
