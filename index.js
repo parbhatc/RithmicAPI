@@ -46,6 +46,7 @@ export {
   FormingBarManager,
   ChartLive,
   wrapChartSession,
+  wrapChartSessionForInstrument,
 } from "./lib/forming/index.js";
 export { fmtPrice, fmtWall, fmtBarTime, fmtOhlc, fmtOhlcChange } from "./lib/util/bar-format.js";
 export { TemplateId, UserType } from "./lib/templates.js";

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Live 1m forming bar OHLC vs Rithmic TimeBar. */
+/** Live forming bars: NQ 1m + ES 30S on one market-data session. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { init, ChartLive, fmtBarTime, fmtOhlc, fmtOhlcChange } from "../index.js";
@@ -50,6 +50,7 @@ live.on("line", (line) => {
 });
 
 await live.subscribe("NQ", "CME", 1, true);
+await live.subscribe("ES", "CME", "30S", true);
 
 await live.run();
 await live.close();

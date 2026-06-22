@@ -15,6 +15,7 @@
     "example:discover": "node --env-file=.env examples/discover.mjs",
     "example:history": "node --env-file=.env examples/chartHistory.mjs",
     "example:live": "node --env-file=.env examples/chartLive.mjs",
+    "example:live-multi": "node --env-file=.env examples/chartLiveMulti.mjs",
     "example:tick": "node --env-file=.env examples/chartTickHistory.mjs",
     "example:fetch": "node --env-file=.env examples/historyFetch.mjs",
     "example:order": "node --env-file=.env examples/orderSession.mjs",

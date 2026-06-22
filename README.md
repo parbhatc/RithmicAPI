@@ -133,6 +133,98 @@ Tick bars: `HistoryFetch.tickBars()` / `tickHistory()` with `resolution: "100T"`
 
 Partial wire updates are merged using `presence_bits` before events fire. Use `chart.status` for one combined view.
 
+## ChartLive — forming bars
+
+`ChartLive` is a high-level session for **trade-driven forming OHLC** with optional comparison to Rithmic `TimeBar` closes. One connection can stream **multiple symbols** at **different resolutions**.
+
+```js
+import { init, ChartLive, fmtBarTime, fmtOhlc } from "rithmic-api";
+
+await init();
+
+const live = await ChartLive.open({
+  user: process.env.RITHMIC_USER,
+  password: process.env.RITHMIC_PASSWORD,
+  systemName: "LucidTrading",
+  gatewayName: "Chicago",
+});
+
+live.on("live", ({ label, bar }) => {
+  console.log(`${label} @ ${fmtBarTime(bar.marker)} ${fmtOhlc(bar)}`);
+});
+
+live.on("timeframe_change", ({ label, previousResolution, resolution, bar }) => {
+  console.log(`${label}: ${previousResolution} → ${resolution}`);
+});
+
+await live.subscribe("NQ", "CME", 1, true);      // 1-minute forming
+await live.subscribe("ES", "CME", "30S", true);  // 30-second forming
+
+// Switch ES from 30S to 3S (Rithmic Trader pattern: unsub old bar → replay → sub new bar)
+await live.changeTimeFrame("ES", "CME", "3S");
+
+await live.run();   // blocks until Ctrl+C or RITHMIC_LIVE_SECONDS
+await live.close();
+```
+
+```bash
+npm run example:live        # single symbol (NQ 1m)
+npm run example:live-multi  # NQ 1m + ES 30S
+```
+
+### API
+
+| Method | Description |
+|--------|-------------|
+| `ChartLive.open(opts)` | Connect ticker + history plants (no symbol required) |
+| `subscribe(symbol, exchange, resolution, forming?)` | Bootstrap history + wire live market/time-bar feeds |
+| `unsubscribe(symbol, exchange)` | Tear down one symbol |
+| `changeTimeFrame(symbol, exchange, resolution, forming?)` | Change resolution in-place (re-bootstrap + resubscribe time bars) |
+| `run()` | Start streaming until Ctrl+C or `RITHMIC_LIVE_SECONDS` |
+| `close()` | Stop feeds and logout |
+
+### Events
+
+All bar events include `label`, `symbol`, `exchange`, and `resolution`.
+
+| Event | When |
+|-------|------|
+| `latest` | Last closed bar from bootstrap |
+| `new_bar` | First tick of a new forming bucket |
+| `live` | Forming bar update (same bucket) |
+| `bar` | Rithmic `TimeBar` closed (official exchange bar) |
+| `closed` | Forming bar closed on rollover (`source`: `forming`) |
+| `timeframe_change` | After `changeTimeFrame` completes bootstrap |
+| `line` | Status / log text |
+
+### Forming — supported resolutions
+
+Forming builds OHLC from **live `LastTrade`** ticks, seeded by a **history bootstrap** on subscribe (or timeframe change).
+
+| Resolution | Forming | Bootstrap source | Live rollover notes |
+|------------|---------|------------------|---------------------|
+| `1` (1m) | Yes | 1m history + optional 1s open refine | `TimeBar` + 1m refresh on minute roll |
+| `2`–`59` (minutes) | Yes | Shared 1m history, aggregated into bucket | Trade-driven bucket boundaries |
+| `5S`–`45S` (sub-minute) | Yes | 1s history window for current bucket | Trade-driven; matches `SECOND_BAR` live `TimeBar` |
+| `60`+ (hours) | Yes | 1h history (+ 1m under the hour) | Trade-driven |
+| `1D`, `1W` | Partial | Daily history | Calendar buckets; limited live trade merge |
+| `1M` / monthly | Partial | Daily/monthly history | Calendar buckets |
+| `100T` etc. (tick) | Yes | Tick-bar replay | Tick-count buckets |
+
+**Not forming-off:** pass `forming: false` to `subscribe()` for official `TimeBar` only (no trade-built OHLC).
+
+**Multi-symbol:** each symbol gets its own `FormingBarManager` and filtered trades. Market data stays subscribed per symbol; only time-bar subscriptions change on `changeTimeFrame`.
+
+**Session limit:** Rithmic prop firms often allow **one** ticker/history session (`tp_max_session_count: 1`). Use one `ChartLive` with multiple `subscribe()` calls instead of multiple connections.
+
+### Environment (live examples)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RITHMIC_LIVE_SECONDS` | `0` (until Ctrl+C) | Auto-stop after N seconds |
+| `RITHMIC_STALE_MS` | `45000` | Log when no packets received |
+| `FORMING_1M_DEBUG` | off | Verbose 1m forming logs to file |
+
 ## Plant sessions (standalone)
 
 Use these when you only need one plant without `ChartSession`:
@@ -205,6 +297,14 @@ Full list: `lib/templates.js`. Protobuf schemas load from `proto/*.proto` at `in
 | `normalizeBar`, `normalizeTrade`, `normalizeQuote`, … | Packet → plain objects |
 | `MarketUpdatePreset`, `ReplayDirection`, … | Wire enums |
 
+### Forming / live
+
+| Export | Description |
+|--------|-------------|
+| `ChartLive` | Multi-symbol forming bars: `subscribe`, `changeTimeFrame`, events |
+| `FormingBarManager` | Lower-level forming OHLC engine (used by `ChartLive`) |
+| `wrapChartSession`, `wrapChartSessionForInstrument` | Session adapters for forming / per-symbol filters |
+
 Deprecated on `ChartSession` (still work): `loadHistory`, `loadTickHistory`, `startLive`, `stopLive`.
 
 ## Project layout
@@ -231,7 +331,8 @@ examples/                runnable scripts (see examples/README.md)
 |------------|--------|
 | `npm run example:discover` | Gateway discovery |
 | `npm run example:history` | Chart history replay |
-| `npm run example:live` | Live trade/quote/bar stream |
+| `npm run example:live` | `ChartLive` — NQ 1m forming bars |
+| `npm run example:live-multi` | `ChartLive` — NQ 1m + ES 30S multi-symbol |
 | `npm run example:tick` | Tick-bar replay |
 | `npm run example:fetch` | One-shot `HistoryFetch` |
 | `npm run example:order` | Order plant login |

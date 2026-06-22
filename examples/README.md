@@ -12,7 +12,8 @@ node --env-file=.env examples/discover.mjs
 |--------|------------|----------------|
 | `discover.mjs` | `npm run example:discover` | Gateway discovery |
 | `chartHistory.mjs` | `npm run example:history` | `ChartSession` + `planets.history.load` |
-| `chartLive.mjs` | `npm run example:live` | Live trade/quote/bar events |
+| `chartLive.mjs` | `npm run example:live` | `ChartLive` — NQ 1m forming |
+| `chartLiveMulti.mjs` | `npm run example:live-multi` | `ChartLive` — NQ 1m + ES 30S |
 | `chartTickHistory.mjs` | `npm run example:tick` | Tick-bar replay |
 | `historyFetch.mjs` | `npm run example:fetch` | One-shot `HistoryFetch` |
 | `orderSession.mjs` | `npm run example:order` | Order plant accounts/routes |
